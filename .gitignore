@@ -6,3 +6,4 @@ Data/
 *.pkl
 *.h5
 *.json
+*.pyc
