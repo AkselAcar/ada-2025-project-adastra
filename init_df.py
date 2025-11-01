@@ -1,6 +1,6 @@
 import pandas as pd
 
-DATA_FOLDER = '../Data/'
+DATA_FOLDER = './Data/'
 
 HYPERLINKS_BODY_DATASET = DATA_FOLDER+"soc-redditHyperlinks-body.tsv"
 HYPERLINKS_TITLE_DATASET = DATA_FOLDER+"soc-redditHyperlinks-title.tsv"
