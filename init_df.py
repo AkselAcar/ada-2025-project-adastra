@@ -1,12 +1,16 @@
 import pandas as pd
 
-DATA_FOLDER = './Data/'
+DATA_FOLDER = '../Data/'
 
 HYPERLINKS_BODY_DATASET = DATA_FOLDER+"soc-redditHyperlinks-body.tsv"
 HYPERLINKS_TITLE_DATASET = DATA_FOLDER+"soc-redditHyperlinks-title.tsv"
+EMBEDDINGS_SUBREDDITS_DATASET = DATA_FOLDER+"web-redditEmbeddings-subreddits.csv"
+EMBEDDINGS_USERS_DATASET = DATA_FOLDER+"web-redditEmbeddings-users.csv"
 
 body_df = pd.read_csv(HYPERLINKS_BODY_DATASET, sep="\t")
 title_df = pd.read_csv(HYPERLINKS_TITLE_DATASET, sep="\t")
+embeddings_subreddits_df = pd.read_csv(EMBEDDINGS_SUBREDDITS_DATASET, header=None)
+embeddings_users_df = pd.read_csv(EMBEDDINGS_USERS_DATASET, header=None)
 
 # Expand properties into columns
 property_columns = [
@@ -107,3 +111,17 @@ def expand_properties(df):
 
 body_df = expand_properties(body_df)
 title_df = expand_properties(title_df)
+
+body_df["TYPE"] = "body"
+title_df["TYPE"] = "title"
+interactions_df = pd.concat([body_df, title_df], ignore_index=True)
+
+interactions_df["TIMESTAMP"] = pd.to_datetime(interactions_df["TIMESTAMP"])
+interactions_df["YEAR"] = interactions_df["TIMESTAMP"].dt.year
+interactions_df["MONTH"] = interactions_df["TIMESTAMP"].dt.month
+interactions_df["WEEK"] = interactions_df["TIMESTAMP"].dt.isocalendar().week
+interactions_df["DAY"] = interactions_df["TIMESTAMP"].dt.day
+
+embeddings_subreddits_df.columns = ["SUBREDDIT"] + [f"emb_{i}" for i in range(embeddings_subreddits_df.shape[1] - 1)]
+embeddings_users_df.columns = ["USER"] + [f"emb_{i}" for i in range(embeddings_users_df.shape[1] - 1)]
+
