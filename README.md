@@ -35,113 +35,88 @@ How toxic communities evolve over time
 
 ## PROJECT PIPELINE
 
-### PHASE 1: Preprocessing & Cleaning
-#### Data Quality Checks
+### STEP 1: Preprocessing & Cleaning
+#### Data Quality Checks & Normalization
 
 1. Import TSV files and expand PROPERTIES column into 86 features
 2. Check data quality (missing values, timestamp parsing)
 3. Check for duplicates and document dataset overlap
+4. Convert timestamps to datetime and split into year, month, and day columns. 
+5. Normalize subreddit names (lowercase, trim whitespace)
 
-#### Data Normalization
-1. Normalize subreddit names (lowercase, trim whitespace)
-2. Create subreddit ID mappings for memory efficiency
+#### Dataset Organization
+Decision made: 
+Create unified view with `link_type` column for combined analyses (single merged dataset between title and body)
 
-#### Temporal Feature Extraction
-Convert timestamps to datetime and extract temporal features (year, month, day)
+### STEP 2: Key Metric Definition
+
+**Aggregation Levels:**
+All metrics computed at multiple scopes:
+- Subreddit level (aggregated over time windows)
+- Subreddit-pair level (source → target relationships)
+- Community cluster level (aggregated within detected communities)
 
 #### Toxicity Metric Definitions
 Define and compute core toxicity metrics that will be used throughout the analysis:
 
-**Rate-Based Metrics:**
-To quantify prevalence and ratios of toxic behavior:
-- `toxicity_rate`: Proportion of toxic source messages (toxic_count / total_count) total and for a fixed time window
-- `toxicity_ratio`: Ratio of toxic to non-toxic source messages (toxic_count / non_toxic_count)
-
 **Intensity Metrics:**
-To capture severity of toxic behavior :
+To capture severity of toxic behavior: 
 - `toxicity_intensity`: Weighted score combining LINK_SENTIMENT with linguistic features
-  - Formula: `base_toxicity_offset + α×LIWC_Anger + β×LIWC_Swear + γ×LIWC_Negemo + δ×Negative_VADER` + standardization
+  - Formula: `α×LIWC_Anger + β×LIWC_Swear + γ×LIWC_Negemo + δ×Negative_VADER + ε×LINK_SENTIMENT`
+
+- `base_toxicity_offset`: A baseline offset computed by averaging toxicity_intensity scores across all links to establish a reference point. 
+This would also be used as a threshold for defining toxic vs non-toxic messages.
+
+- `toxicity_std`: The standard deviation of toxicity_intensity scores across all links.
+
+- `toxicity_zscore = (toxicity_intensity - base_toxicity_offset) / toxicity_std`: this formula would standardise toxicity_intensity scores to allow meaningful comparisons across different links. 
+
+**Count Metrics:**
+Foundation for all rate-based calculations. Counts are computed within a specific scope (not the entire dataset):
+- `toxic_count`: Number of messages (links) classified as toxic within the given scope. A message is toxic if `toxicity_intensity > toxicity_threshold` (threshold defined below).
+- `non_toxic_count`: Number of messages classified as non-toxic (`toxicity_intensity ≤ toxicity_threshold`) within the scope.
+- `total_count`: Total number of messages within the scope = `toxic_count + non_toxic_count`.
+
+
+**Rate-Based Metrics:**
+To quantify frequency and ratios of toxic behavior:
+- `toxicity_rate`: 
+Proportion of toxic source messages in a time window, `toxic_count / (toxic_count + non_toxic_count)`. Range: 0–1.
+- An **optional** metric derived from this one would be the `toxicity_odds = (toxic_count / non_toxic_count) = toxicity_rate / (1 − toxicity_rate)` as it could be used to model odds and log-odds for logistic models in the following steps of the project.
 
 **Advanced Linguistic Metrics:**
+
+These metrics could be useful and interesting when analysing the propagation of the negativity among subreddits. 
 - `emotional_volatility`: Standard deviation of `toxicity_intensity`
 - `personal_attack_indicators`: LIWC_You + LIWC_Negemo combinations
 - `rational_discourse_score`: LIWC_CogMech + LIWC_Cause : this captures logical reasoning in comments since LIWC_CogMech relates to cognitive mechanisms and LIWC_Cause relates to causal reasoning (e.g., for both: LIWC_CogMech words include "cause", "know", "ought", while LIWC_Cause words include "because", "effect", "hence"). 
-- `complexity_metrics`: Readability + word length + vocabulary richness -> Could be interesting but complicqted to do, to discuss further.
+- `complexity_metrics`: Readability + word length + vocabulary richness.
 
 **Directional Metrics:**
 - `toxicity_out`: Toxic links sent by a subreddit (aggressor behavior)
 - `toxicity_in`: Toxic links received by a subreddit (victim/target behavior)
-- `toxicity_balance`: Net toxicity = toxicity_out - toxicity_in
-- `reciprocal_toxicity`: Bidirectional toxic relationships between subreddit pairs = # of bidirectinal edges in the toxic interaction graph
+- `toxicity_balance`: Net toxicity = `toxicity_out - toxicity_in`
+- `reciprocal_toxicity`: Bidirectional toxic relationships between subreddit pairs which corresponds to the number of bidirectinal edges in the toxic interaction graph.
 
 **Temporal Metrics:**
 - `toxicity_velocity`: Rate of change in toxicity over time (Δtoxicity_rate / Δtime)
 - `toxicity_acceleration`: Second derivative (change in velocity)
 - `toxicity_persistence`: Duration of sustained toxic behavior (consecutive toxic periods)
 
-**Network-Adjusted Metrics:**
-Used to identify unusually high toxic behavior and periods:
-- `normalized_toxicity`: Toxicity rate adjusted for subreddit activity level
-- `relative_toxicity`: Toxicity compared to platform baseline for same time period
-
 **Threshold Definitions:**
-- `toxic_onset`: First occurrence of toxic behavior (based on first toxicity_intensity score above threshold to be set)
+- `toxicity_threshold`: Threshold for classifying individual messages as toxic = `base_toxicity_offset + k×toxicity_std`, where k is a sensitivity parameter (recommended: k=1, capturing ~16% most toxic messages; alternative: k=0 for above-mean, or k=2 for top ~2.5%).
+- `toxic_onset`: First occurrence of toxic behavior (based on first toxicity_intensity score above toxicity_threshold)
 - `chronic_toxicity`: Sustained toxicity_rate > 50% for X+ consecutive weeks/ consecutive links
 - `outbreak_threshold`: toxicity_rate > (platform_mean + 2×platform_std)
-- `recovery_threshold`: toxicity_rate < 10% for X+ consecutive weeks after toxic period
-
-**Aggregation Levels:**
-All metrics computed at multiple granularities:
-- Subreddit level (aggregated over time windows)
-- Subreddit-pair level (source → target relationships)
-- Community cluster level (aggregated within detected communities)
-
-#### Dataset Organization
-Decision to make: 
-Create unified view with `link_type` column for combined analyses (single merged dataset between title and body)
+- `recovery_threshold`: A subreddit is considered recovered after a toxic period when the weekly toxicity_rate falls below 10% for X consecutive weeks. 
 
 
-### PHASE 3: Network Construction
+### STEP 3: Network Construction
 
 1. Build temporal network snapshots (monthly/yearly windows as shorter windows seem unreasonable given the data)  
 2. Create directed graphs for each time period
 3. Compute node edge attributes: degrees, toxicity metrics, network centrality measures
 4. Store as adjacency lists or graph objects for analysis
-
-### PHASE 4: Feature Engineering
-
-
-
-#### 4.2 Propagation Mechanism Features  
-- **Cascade chains**: Track A→B→C propagation sequences
-- **Cascade metrics**: Depth, breadth, time-to-infection
-- **Linguistic shifts**: LIWC feature changes before/after toxic exposure
-- **Toxicity style transfer**: Cluster subreddits by toxic linguistic profiles
-- **Immunity indicators**: Subreddits exposed to toxicity without becoming toxic
-- **Alliance networks**: Positive connection clusters
-- **Recovery patterns**: Toxic→non-toxic transitions
-
-#### 4.3 Temporal Pattern Features ->>>> TO REMOVE
-- **Seasonal decomposition**: Trend, seasonal, residual components
-- **Event correlation windows**: Align with external events
-- **Temporal dynamics**: Response times, cooling-off periods, contagion velocity
-- **Activity rhythms**: Hour-of-day, day-of-week patterns
-- **Platform trends**: Long-term toxicity trajectory
-
-
-
-#### 4.5 Life Cycle-Specific Features
-- **Developmental stage**: Days since first appearance, activity trajectory, maturity phase
-- **Toxicity evolution**: Onset timing, ramp-up velocity, escalation pattern, plateau identification
-- **Early warning indicators**:
-  - Pre-toxic linguistic precursors (rising anger/negativity before first toxic link)
-  - Network precursors (degree changes, clique formation, reciprocity decline)
-  - Activity precursors (posting volatility, sudden connection influx)
-- **Critical transitions**: First toxic link sent/received, threshold crossings, reciprocal toxicity
-- **Trajectory patterns**: Innocent→decline, born toxic, rapid radicalization, oscillating, recovery, chronic
-- **Trajectory shape**: Peak toxicity, time-to-peak, duration, volatility, trend slope, curvature
-- **Risk scores**: Composite toxicity risk score (TRS), time-to-toxicity predictors, stability scores
-
 
 ### PHASE 5: Derived Datasets
 
