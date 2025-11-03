@@ -4,34 +4,23 @@
 **Team Members: Aksel Acar, Emilien Coudurier, Nathan Tabet, Cyprien Tordo, Cedric Zanou**
 
 ## PROJECT OVERVIEW
-This project analyzes toxicity on Reddit using an epidemiological framework, treating toxic behavior as an "infectious disease" that spreads through social networks. The analysis spans 2013-2017 Reddit data with ~858K interaction records between subreddits.
+While networks of the web are not physical, it turns out they can closely resemble physical ones, and from their hyper-connected nature, they tend to share their spreading behaviour with diseases. We aim to conduct an epidemiological analysis of toxicity on Reddit in this project, treating toxic behavior as an infectious disease that spreads through social networks.
+Recent related works have been conducted, especially on identifying toxicity in social media [1][2] and intercommunity interactions [3], and we intend to analyze how toxicity thrives based on their contribution. From birth to death and through propagation, we treat it like a living organism as a way to highlight temporal patterns and potentially predict its outbreaks, among different communities.
 
 ## CORE RESEARCH ANGLES
 
-### 1. OUTBREAK ANALYSIS
-How toxicity appears and spreads initially
-- Identifying "breakouts" of toxic behavior
-- Detecting "patient zero" communities for cascade of toxic interactions
-
-### 2. PROPAGATION MECHANISMS  
-How toxicity spreads through the network
-- Analyzing cascade patterns (A→B→C toxic chains)
-- Identifying community-specific "mutations" in toxic behavior (e.g., different forms of toxicity in different toxic subreddits)
-- Studying potential "immunity" through positive alliances
-- Understanding contagion mechanisms and resistance factors
-
-### 3. TEMPORAL PATTERNS
-How toxicity follows seasonal patterns
-- Identifying cyclical patterns (like flu seasonality)
-- Correlating toxicity spikes with major events
-- Understanding platform-wide rhythms and trends
-
-### 4. LIFE CYCLE OF TOXICITY
-How toxic communities evolve over time
-- Mapping developmental trajectories from birth to maturity
-- Identifying early warning signs that predict future toxicity
-- Classifying trajectory patterns (gradual decline, rapid radicalization, recovery, etc.)
-- Predicting community outcomes from early behavioral signals
+Among others, we aim to address the following research questions:
+### What conditions need to be met for toxicity to appear?
+- Do specific time periods stand out for breakouts? 
+- Do patient-zero communities exist?
+### How does toxicity spread through the network? 
+- Do specific contagion patterns stand out (cascades, toxic chains)?
+- Does toxicity mutate (i.e., changes in form)?
+- What key actions manage to restrain or stop propagation?
+### Does toxicity follow cyclical patterns?
+- Do global rhythms and trends stand out?
+- Can we classify trajectory patterns?
+- Can we predict toxicity outcomes from early behavioral signals?
 
 ## PROJECT PIPELINE
 
@@ -218,3 +207,95 @@ These metrics could be useful and interesting when analysing the propagation of 
 
 #### 7.3 Control Variables
 - Platform growth metrics, policy change timeline
+
+
+
+
+# PROJECT PIPELINE OVERVIEW
+
+## **PHASE 1: DATA PREPARATION** (Milestone P2)
+
+### Step 1: Clean & Unify Data
+- Load TSV files
+- Merge title/body datasets
+- Standardize subreddit names
+- Parse timestamps
+- Check data quality
+
+### Step 2: Define Core Metrics
+- **Toxicity Score**: Combine sentiment + LIWC features
+- **Toxicity Rate**: % of toxic messages per subreddit/time
+- **Directional Metrics**: Toxicity sent vs received
+- **Temporal Metrics**: How toxicity changes over time
+
+### Step 3: Build Networks
+- Create monthly network snapshots
+- Build directed graphs (subreddit → subreddit)
+- Calculate network statistics (degree, centrality)
+
+---
+
+## **PHASE 2: OUTBREAK ANALYSIS** (After P2)
+
+### Step 4: Find Communities
+- Detect subreddit clusters (who interacts with whom?)
+- Characterize each community's baseline behavior
+- Track community changes over time
+
+### Step 5: Identify "Patient Zero"
+- **Detect outbreaks**: When toxicity suddenly spikes
+- **Find origins**: Which subreddit started it?
+- **Measure impact**: How big did the outbreak get?
+
+---
+
+## **PHASE 3: PROPAGATION ANALYSIS** (After P2)
+
+### Step 6: Trace Cascades
+- **Find chains**: A→B→C toxic spreading patterns
+- **Analyze mutations**: How toxicity changes as it spreads
+- **Model contagion**: What makes toxicity spread?
+
+### Step 7: Study Immunity
+- **Positive alliances**: Do friendly connections protect communities?
+- **Resistance factors**: What makes communities immune?
+
+---
+
+## **PHASE 4: TEMPORAL PATTERNS** (After P2)
+
+### Step 8: Find Cycles & Events
+- **Periodicity**: Does toxicity follow seasonal patterns?
+- **Event correlation**: Do real-world events trigger spikes?
+- **Fourier analysis**: Detect hidden rhythms
+
+---
+
+## **PHASE 5: LIFE CYCLES** (After P2)
+
+### Step 9: Track Evolution
+- **Classify trajectories**: How do toxic communities evolve?
+  - Gradual radicalization
+  - Sudden outbreak then recovery
+  - Chronic toxicity
+- **Early warning**: Predict which communities will become toxic
+
+---
+
+## **PHASE 6: TESTING & VALIDATION** (After P2)
+
+### Step 11: Create Visualizations
+- Animated networks showing toxicity spread
+- Epidemic curves (like flu charts)
+- Interactive dashboards
+
+### Step 12: Check Robustness
+- Sensitivity tests
+- Validate on different time periods
+- Rule out alternative explanations
+
+## REFERENCES
+
+[1] VAIDYA, Aatman, NAGAR, Seema, et NANAVATI, Amit A. Analysing the Spread of Toxicity on Twitter. In : Proceedings of the 7th Joint International Conference on Data Science & Management of Data (11th ACM IKDD CODS and 29th COMAD). 2024. p. 118-126.
+[2] SHETH, Amit, SHALIN, Valerie L., et KURSUNCU, Ugur. Defining and detecting toxicity on social media: context and knowledge are key. Neurocomputing, 2022, vol. 490, p. 312-318.
+[3] KUMAR, Srijan, HAMILTON, William L., LESKOVEC, Jure, et al. Community interaction and conflict on the web. In : Proceedings of the 2018 world wide web conference. 2018. p. 933-943.
