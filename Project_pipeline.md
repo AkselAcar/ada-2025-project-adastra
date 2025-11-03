@@ -80,7 +80,7 @@ These metrics could be useful and interesting when analysing the propagation of 
 
 1. Build temporal network snapshots (monthly/yearly windows as shorter windows seem unreasonable given the data)  
 2. Build directed graphs for each time period
-3. Compute node edge attributes: degrees, toxicity metrics, network centrality measures
+3. Compute node edge attributes: degrees, toxicity metrics, network centrality measures, eigenvector centrality
 4. Store as adjacency lists or graph objects for analysis
 ---
 
