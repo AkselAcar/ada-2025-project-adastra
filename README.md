@@ -4,7 +4,11 @@
 **Team Members: Aksel Acar, Emilien Coudurier, Nathan Tabet, Cyprien Tordo, Cedric Zanou**
 
 ## PROJECT OVERVIEW
-This project analyzes toxicity on Reddit using an epidemiological framework, treating toxic behavior as an "infectious disease" that spreads through social networks. The analysis spans 2013-2017 Reddit data with ~858K interaction records between subreddits.
+
+
+This project analyzes toxicity on Reddit using an epidemiological framework, treating toxic behavior as 
+an "infectious disease" that spreads through social networks. The analysis spans 2013-2017 Reddit data with 
+~858K interaction records between subreddits.
 
 ## CORE RESEARCH ANGLES
 
