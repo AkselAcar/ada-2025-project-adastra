@@ -1,9 +1,9 @@
 # Data
 #Data/
-#*.csv
-#*.tsv
-#*.xlsx
-#*.pkl
-#*.h5
-#*.json
-#*.pyc
+*.csv
+*.tsv
+*.xlsx
+*.pkl
+*.h5
+*.json
+*.pyc
