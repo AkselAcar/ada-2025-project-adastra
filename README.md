@@ -36,7 +36,7 @@ Among others, we aim to address the following research questions:
 7. Check for duplicates and document dataset overlap
 
 
-### STEP 2: Key Metric Definition
+### STEP : Key Metric Definition
 
 **Aggregation Levels:**
 All metrics computed at multiple scopes:
