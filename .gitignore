@@ -7,3 +7,6 @@
 *.h5
 *.json
 *.pyc
+
+# MacOS specific files
+.DS_Store
