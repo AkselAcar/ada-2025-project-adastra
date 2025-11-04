@@ -26,7 +26,7 @@ property_columns = [
     "FRACTION_OF_WHITE_SPACES",
     "FRACTION_OF_SPECIAL_CHARACTERS_SUCH_AS_COMMA_EXCLAMATION_MARK_ETC",
     "NUMBER_OF_WORDS",
-    "NUMBER_OF_UNIQUE_WORKS",
+    "NUMBER_OF_UNIQUE_WORDS",
     "NUMBER_OF_LONG_WORDS_AT_LEAST_6_CHARACTERS",
     "AVERAGE_WORD_LENGTH",
     "NUMBER_OF_UNIQUE_STOPWORDS",
@@ -129,10 +129,14 @@ interactions_df["TARGET_SUBREDDIT"] = interactions_df["TARGET_SUBREDDIT"].astype
 
 # =========================== Expand timestamp into day, week, month and year
 interactions_df["TIMESTAMP"] = pd.to_datetime(interactions_df["TIMESTAMP"])
-interactions_df["YEAR"] = interactions_df["TIMESTAMP"].dt.year
-interactions_df["WEEK"] = interactions_df["TIMESTAMP"].dt.isocalendar().week
-interactions_df["MONTH"] = interactions_df["TIMESTAMP"].dt.month
-interactions_df["DAY"] = interactions_df["TIMESTAMP"].dt.day
+
+# Reorder the interactions_df chronologically
+interactions_df = interactions_df.sort_values('TIMESTAMP', ascending=True).reset_index(drop=True)
+
+#interactions_df["YEAR"] = interactions_df["TIMESTAMP"].dt.year
+#interactions_df["WEEK"] = interactions_df["TIMESTAMP"].dt.isocalendar().week
+#interactions_df["MONTH"] = interactions_df["TIMESTAMP"].dt.month
+#interactions_df["DAY"] = interactions_df["TIMESTAMP"].dt.day
 
 
 # =========================== Formate embeddings dataset and number them
@@ -146,6 +150,10 @@ def check_quality(df):
     print(f"Shape: {df.shape}")
     print("\nMissing values:\n", df.isnull().sum().sort_values(ascending=False))
     print("\nDuplicate rows:", df.duplicated().sum())
-    if "TIMESTAMP" in df.columns:
-        df["DATETIME"] = pd.to_datetime(df["TIMESTAMP"], errors="coerce")
-        print("Unparseable timestamps:", df["DATETIME"].isna().sum())
+    #if "TIMESTAMP" in df.columns:
+        #df["DATETIME"] = pd.to_datetime(df["TIMESTAMP"], errors="coerce")
+        #print("Unparseable timestamps:", df["DATETIME"].isna().sum())
+
+
+def function_test_autoreload():
+    print("Autoload test successful.")
