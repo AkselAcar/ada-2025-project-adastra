@@ -4,4 +4,4 @@ from .models import *
 
 from .scripts import *
 
-from .utils import *
+from .utils.metric_utils import evaluate_props_norm_diffs
