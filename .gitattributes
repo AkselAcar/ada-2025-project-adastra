@@ -1,6 +1,0 @@
-# Use nbdime for notebook diff and merge
-*.ipynb diff=jupyternotebook
-*.ipynb merge=jupyternotebook
-
-# Treat notebooks as text for Git
-*.ipynb text
