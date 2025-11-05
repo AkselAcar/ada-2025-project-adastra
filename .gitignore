@@ -11,5 +11,8 @@
 # MacOS specific files
 .DS_Store
 
-# Jupyter Notebook checkpoints
+# Jupyter Notebook checkpoints and cache files ignored
+.vscode/
 .ipynb_checkpoints/
+__pycache__/
+
