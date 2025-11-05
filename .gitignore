@@ -1,5 +1,5 @@
 # Data
-Data/
+#Data/
 *.csv
 *.tsv
 *.xlsx
@@ -7,3 +7,6 @@ Data/
 *.h5
 *.json
 *.pyc
+
+# MacOS specific files
+.DS_Store
