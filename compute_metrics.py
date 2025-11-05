@@ -173,30 +173,64 @@ def compute_toxicity_std(data, time_window="overall"):
     raise ValueError(f"Unsupported time_window: {time_window}")
 
 
-def compute_toxicity_zscore(data):
+def compute_toxicity_zscore(data, time_window="overall"):
     """
-    This fucntion computes the toxicity zscore metric (standardized toxicity intensity).
+    This function computes the toxicity z-score metric within a given time scope.
 
     Parameters:
     data (pd.DataFrame): A pandas DataFrame containing the Reddit Interactions Hyperlinks.
+    time_window(str): Scope for computation (note that here we can only use 'overall', 'monthly', 'yearly')
 
     Returns:
-    float or pd.Series: The computed toxicity zscore values.
+    pd.Series: The computed toxicity z-score values for each row in the dataset.
     """
-    toxicity_intensity = compute_toxicity_score(data).copy()
+    verify_data_format(data, time_window)
     
-    # First, we ensure that toxicity_intensity are scalar values
-    ti_series = toxicity_intensity["TOXICITY_SCORE"].astype(float)
+    ti_series = data["TOXICITY_SCORE"].astype(float)
 
-    base_toxicity_offset = compute_base_toxicity_offset(data, "overall")
-    toxicity_std = compute_toxicity_std(data, "overall")
+    base_toxicity_offset = compute_base_toxicity_offset(data, time_window)
+    toxicity_std = compute_toxicity_std(data, time_window)
 
-    # Then, we checks whether toxicity_std is zero and if so, we return a NaN value to avoid division by zero
-    if toxicity_std == 0:
-        return np.nan
-
-    result = (ti_series - base_toxicity_offset) / toxicity_std
-    return result
+    # Handle the case where mean/std are scalars
+    if pd.api.types.is_scalar(base_toxicity_offset) and pd.api.types.is_scalar(toxicity_std):
+        # To handle the case of zero standard deviation
+        if toxicity_std == 0:
+            return pd.Series(np.nan, index=ti_series.index)
+        result = (ti_series - base_toxicity_offset) / toxicity_std
+        return result
+    
+    # We need to align each row's timestamp to the corresponding period mean/std
+    if "TIMESTAMP" in data.columns:
+        timestamps = pd.to_datetime(data["TIMESTAMP"], errors="coerce")
+        tw = str(time_window).lower()
+        
+        # Map each row to its period (month or year)
+        match tw:
+            case "monthly" | "m":
+                # Convert timestamps to month-end periods for alignment
+                # First we convert each datetime to a period object representing the month
+                # (e.g., 2023-06-15 -> 2023-06) then we convert it back to a timestamp at month-end
+                # (e.g., 2023-06 -> 2023-06-30)
+                period_idx = timestamps.dt.to_period('M').dt.to_timestamp('M')
+            case "yearly" | "y" | "annual":
+                # Convert timestamps to year-end periods for alignment
+                period_idx = timestamps.dt.to_period('Y').dt.to_timestamp('Y')
+            case _:
+                raise ValueError(f"Unsupported time_window for z-score with Series: {time_window}")
+        
+        # We align the mean and std Series to each row using the period index
+        # This creates an array where each entry corresponds to the mean/std of the period
+        # (e.g., for monthly, all rows in June 2023 get the mean/std of June 2023)
+        mean_aligned = base_toxicity_offset.reindex(period_idx).values
+        std_aligned = toxicity_std.reindex(period_idx).values
+        
+        std_aligned = np.where(std_aligned == 0, np.nan, std_aligned)
+        
+        # Finally, we compute z-scores element-wise
+        result_vals = (ti_series.values - mean_aligned) / std_aligned
+        return pd.Series(result_vals, index=ti_series.index)
+    
+    raise ValueError("TIMESTAMP column required for non-overall time_window")
     
 
 # ===== COUNT METRICS =====
