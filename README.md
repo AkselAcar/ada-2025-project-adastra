@@ -1,5 +1,5 @@
 # ADA CS-(402) COURSE PROJECT P2 - Team ADAstra
-# Treating Toxicity as an Infectious Disease
+# Epidemiology of Toxicity on Reddit Hyperlink Network
 
 **Team Members: Aksel Acar, Emilien Coudurier, Nathan Tabet, Cyprien Tordo, Cedric Zanou**
 
@@ -23,14 +23,11 @@ Among others, we aim to address the following research questions:
 - Can we predict toxicity outcomes from early behavioral signals?
 
 ## ADDITIONAL DATASETS 
-We chose to use every dataset proposed. Namely: 
-- soc-redditHyperlinks-body.tsv
-- soc-redditHyperlinks-title.tsv
-- web-redditEmbeddings-users.csv (additional)
-- web-redditEmbeddings-subreddits.csv (additional)
+We chose to use the following additional datasests: 
+- web-redditEmbeddings-subreddits.csv 
 
 <!-- The two first datasets contain subreddit links with their associated properties, the first one being only based on body links and the second on title links. They are independent datasets and since we have no purpose in treating them separately, we merge them and add a flag telling from which dataset the link is from. We benefit from this merging as it reduces the number of separate analyses, and forms a denser, more relevant dataset for our purpose.  -->
-The two last datasets, which are additional, are significantly smaller as they contain the embeddings for users and subreddits, which will allow us to have a visual representation of the communities, from clustering in instance. They are interesting in our project as they offer the possibility of a spatial analysis of groups, especially relevant for patient-0 community identification and propagation study among others.
+This additional dataset contains the embeddings for subreddits, which will allow us to have a visual representation of the communities, from clustering in instance. They are interesting in our project as they offer the possibility of a spatial analysis of groups, especially relevant for patient-0 community identification and propagation study among others.
 
 ## METHODS
 
