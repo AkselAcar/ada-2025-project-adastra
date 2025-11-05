@@ -149,13 +149,22 @@ def construct_daily_interaction_df(df, keyword="", time_window=None):
     return daily_interactions
 
 
-def construct_neg_interaction_df(df, time_window=None, criteria=None, threshold=None, upper=None, groupby_type="DAY"):
+def construct_neg_interaction_df(df, time_window=None, criteria=None, threshold = None, upper=None, groupby_type="DAY"):
     """
     Constructs the negative interaction count (series or) dataframe based on given dataframe, given criterion,
     given thresholds and groupby type (daily, per subreddit, ...).
     It includes as many columns as criteria and as many rows as the input dataframe groupby_type has (number
     of days, number of subreddits, ...). By default, a single criterion is considered
     (LINK_SENTIMENT <= 0) and the whole time window is chosen to construct the dataframe grouped by day.
+
+    :param df: dataframe from which to construct the interaction counts (panda dataframe)
+    :param time_window: (OPTIONAL) time window used to extract the sub-dataset (python list of length 2)
+    :param criteria: (OPTIONAL) list of criteria on which perform the counts (python list)
+    :param threshold: (OPTIONAL) list of threshold for each criterion, upper or lower (python list)
+    :param upper: (OPTIONAL) whether if considered thresholds are upper (True) or lower (False) bounds (python list of booleans)
+    :param groupby_type: (OPTIONAL) type of grouping (typically "DAY", "SOURCE_SUBREDDIT" or "TARGET_SUBREDDIT", string)
+
+    :return: neg_interaction_df (panda dataframe)
     """
 
     if criteria is None:
