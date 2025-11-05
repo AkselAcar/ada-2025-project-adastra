@@ -1,4 +1,4 @@
-from .data.init_df import interactions_df, embeddings_subreddits_df, embeddings_users_df, check_quality
+from .data.init_data import interactions_df, embeddings_subreddits_df, embeddings_users_df, check_quality
 
 from .models import *
 
