@@ -129,10 +129,10 @@ interactions_df["TARGET_SUBREDDIT"] = interactions_df["TARGET_SUBREDDIT"].astype
 
 # =========================== Expand timestamp into day, week, month and year
 interactions_df["TIMESTAMP"] = pd.to_datetime(interactions_df["TIMESTAMP"])
-interactions_df["YEAR"] = interactions_df["TIMESTAMP"].dt.year
-interactions_df["WEEK"] = interactions_df["TIMESTAMP"].dt.isocalendar().week
-interactions_df["MONTH"] = interactions_df["TIMESTAMP"].dt.month
-interactions_df["DAY"] = interactions_df["TIMESTAMP"].dt.day
+# interactions_df["YEAR"] = interactions_df["TIMESTAMP"].dt.year
+# interactions_df["WEEK"] = interactions_df["TIMESTAMP"].dt.isocalendar().week
+# interactions_df["MONTH"] = interactions_df["TIMESTAMP"].dt.month
+# interactions_df["DAY"] = interactions_df["TIMESTAMP"].dt.day
 
 
 # =========================== Formate embeddings dataset and number them
@@ -146,6 +146,6 @@ def check_quality(df):
     print(f"Shape: {df.shape}")
     print("\nMissing values:\n", df.isnull().sum().sort_values(ascending=False))
     print("\nDuplicate rows:", df.duplicated().sum())
-    if "TIMESTAMP" in df.columns:
-        df["DATETIME"] = pd.to_datetime(df["TIMESTAMP"], errors="coerce")
-        print("Unparseable timestamps:", df["DATETIME"].isna().sum())
+    # if "TIMESTAMP" in df.columns:
+    #     df["DATETIME"] = pd.to_datetime(df["TIMESTAMP"], errors="coerce")
+    #     print("Unparseable timestamps:", df["DATETIME"].isna().sum())
