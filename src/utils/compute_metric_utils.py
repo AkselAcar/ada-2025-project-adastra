@@ -173,7 +173,7 @@ def compute_toxicity_std(data, time_window="overall"):
     raise ValueError(f"Unsupported time_window: {time_window}")
 
 
-def compute_toxicity_zscore(data, time_window="overall"):
+def compute_toxicity_context_zscore(data, time_window="overall"):
     """
     This function computes the toxicity z-score metric within a given time scope.
 
