@@ -52,6 +52,19 @@ We detect outbreaks when a subreddit's toxicity rate jumps above its normal base
 To detect periodicities in toxicity, we will apply FFT to subreddit-level `toxicity_rate` time series, identifying dominant frequencies (monthly, annual cycles) and assessing statistical significance against randomly permuted time series. We will correlate toxicity spikes with a timeline of major 2013-2017 events to test whether platform-wide or community-specific increases follow external triggers. For life cycle analysis, we will cluster subreddit toxicity trajectories to identify common patterns such as: chronic toxicity (sustained high levels), acute outbreaks (sharp spikes with recovery), gradual radicalization, and intermittent episodes. To build an early warning system, we will use features from each subreddit's first N weeks activity (initial toxicity trends, network position, linguistic markers) and train logistic regression or random forest classifiers to predict chronic toxicity development, validating on a testing split.
 
 ## PROPOSED TIMELINE & ORGANIZATION WITHIN THE TEAM
+### Members:
+Aksel (A) \
+Emilien (E) \
+Nathan (N) \
+Cyprien (Cy) \
+Cédric (Cé)
+
+W9:   Find communities (N, Cy) + Identify Patient 0 (A, E, Cé) + H2 \
+W10: Find communities (N, Cy) + Identify Patient 0 (A, E, Cé) + H2 \
+W11: Trace cascades (E, Cy) + Study Immunity (N, A, Cé)      + H2 \
+W12: Trace cascades (E, Cy) + Study Immunity (N, A) + Create visualization (Cé) \
+W13: Find Cycles & Events (E, N) + Track evolution (Cy) + Create visualization (A, Cé) \
+W14: Find Cycles & Events (E, N) + Track evolution (Cy) + Create visualization (A, Cé)
 
 ## REFERENCES
 [1] VAIDYA, Aatman, NAGAR, Seema, et NANAVATI, Amit A. Analysing the Spread of Toxicity on Twitter. In : Proceedings of the 7th Joint International Conference on Data Science & Management of Data (11th ACM IKDD CODS and 29th COMAD). 2024. p. 118-126.
