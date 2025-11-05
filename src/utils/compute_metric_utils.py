@@ -3,7 +3,7 @@ import numpy as np
 
 # ===== CONSTANT DEFINITIONS =====
 
-TOXICITY_THRESHOLD = 0.2
+TOXICITY_THRESHOLD = 0.024
 
 TOX_PROPS = pd.DataFrame([
     [-3, "FRACTION_OF_DIGITS"],
@@ -288,7 +288,7 @@ def compute_non_toxic_count(data, time_window="overall"):
     # First, we ensure the data contains all the necessary columns
     verify_data_format(data, time_window)
 
-    tw = str(time_window).tolower()
+    tw = str(time_window).lower()
     match tw:
         case "overall": 
             return int((data["TOXICITY_SCORE"] < TOXICITY_THRESHOLD).sum())
@@ -326,25 +326,25 @@ def compute_total_count(data, time_window):
     # First, we ensure the data contains all the necessary columns
     verify_data_format(data, time_window)
 
-    tw = str(time_window).tolower()
+    tw = str(time_window).lower()
     match tw:
         case "overall":
-            return int(data["TOXICITY_SCORE"].sum())
+            return len(data)
         
         case "monthly" | "m":
-            series = data.set_index("TIMESTAMP")["TOXICITY_SCORE"].resample("M").sum()
-            return series
+            series = data.set_index("TIMESTAMP").resample("M").size()
+            return series.astype(int)
         
         case "yearly" | "y" | "annual":
-            series = data.set_index("TIMESTAMP")["TOXICITY_SCORE"].resample("Y").sum()
-            return series
+            series = data.set_index("TIMESTAMP").resample("Y").size()
+            return series.astype(int)
         
         case _:
             pass
 
-    if isinstance(time_window, str) and time_window.toupper().endswith(("D", "W", "M", "Y")):
-        df = data.sort_values["TIMESTAMP"].set_index["TIMESTAMP"]
-        rolling_counts = df["TOXICITY_SCORE"].rolling(time_window).sum()
+    if isinstance(time_window, str) and time_window.upper().endswith(("D", "W", "M", "Y")):
+        df = data.sort_values("TIMESTAMP").set_index("TIMESTAMP")
+        rolling_counts = df["TOXICITY_SCORE"].rolling(time_window).count()
         return rolling_counts.fillna(0).astype(int)
     
     raise ValueError(f"Unsupported time_window: {time_window}")
@@ -501,7 +501,7 @@ def compute_toxicity_balance(data, time_window, subreddit_name):
         raise ValueError("subreddit_name must be a string representing the subreddit name")
 
 
-def compute_reciprocal_toxicity(data, time_window):
+def compute_reciprocal_toxicity(data, time_window, subreddit_name=None):
     """
     This function counts the number of bidirectional (reciprocal) edges between subreddit pairs
     in the toxic interaction graph within a time scope.
@@ -510,11 +510,20 @@ def compute_reciprocal_toxicity(data, time_window):
     Parameters:
     data (pd.DataFrame): A pandas DataFrame containing the Reddit Interactions Hyperlinks.
     time_window(str): Scope for counting
+    subreddit_name(str, optional): If provided, only count bidirectional edges involving this subreddit.
+                                    If None, count all bidirectional edges in the dataset.
 
     Returns:
     int or pd.Series: Count of bidirectional edges in the specified time scope.
     """
     verify_data_format(data, time_window)
+    
+    # We make sure subreddit_name is a string
+    if subreddit_name is not None:
+        if not isinstance(subreddit_name, str):
+            raise ValueError("subreddit_name must be a string representing the subreddit name")
+        data = data[(data["SOURCE_SUBREDDIT"] == subreddit_name) | 
+                    (data["TARGET_SUBREDDIT"] == subreddit_name)]
 
     def _count_bidirectional_edges(df):
         """
