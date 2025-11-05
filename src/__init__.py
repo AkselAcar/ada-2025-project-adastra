@@ -7,3 +7,4 @@ from .scripts import *
 from .utils.compute_metric_utils import *
 from .utils.patient_zero_utils import *
 from .utils.plot_metrics_utils import *
+from .utils.network_utils import *
