@@ -9,6 +9,21 @@ import community as community_louvain
 from src import *
 
 def filter_active_subreddits(min_interactions):
+    """
+    Filter subreddits based on a minimum number of interactions.
+
+    Parameters
+    ----------
+    min_interactions : int
+        The minimum number of outgoing interactions required for a subreddit to be considered active.
+
+    Returns
+    -------
+    active_subs : pandas.Index
+        Index of subreddit names that have at least `min_interactions` outgoing interactions.
+    filtered_embeddings : pandas.DataFrame
+        Subset of `embeddings_subreddits_df` containing only the active subreddits.
+    """
     # === Count subreddit activity ===
     activity_counts = interactions_df["SOURCE_SUBREDDIT"].value_counts()
 
@@ -20,6 +35,22 @@ def filter_active_subreddits(min_interactions):
 
 
 def reduce_embeddings_2d(embeddings_df):
+    """
+    Reduce high-dimensional subreddit embeddings to 2D using UMAP.
+
+    Parameters
+    ----------
+    embeddings_df : pandas.DataFrame
+        DataFrame containing subreddit embeddings, with one row per subreddit and
+        a column named 'SUBREDDIT'.
+
+    Returns
+    -------
+    embeddings_df : pandas.DataFrame
+        Input DataFrame augmented with two new columns:
+        - 'x': UMAP component 1
+        - 'y': UMAP component 2
+    """
     embedding_cols = [c for c in embeddings_df.columns if c != 'SUBREDDIT']
     reducer = umap.UMAP(n_neighbors=30, min_dist=0.1, n_components=2, random_state=42)
     embedding_2d = reducer.fit_transform(embeddings_df[embedding_cols])
@@ -29,6 +60,24 @@ def reduce_embeddings_2d(embeddings_df):
 
 
 def animate_evolution(active_subs, filtered, freq):
+    """
+    Create an animated visualization showing the evolution of mean toxicity over time
+    for active subreddits projected in 2D UMAP space.
+
+    Parameters
+    ----------
+    active_subs : list or pandas.Index
+        List of subreddit names considered active.
+    filtered : pandas.DataFrame
+        Embeddings DataFrame containing UMAP coordinates ('x', 'y') for subreddits.
+    freq : str
+        Frequency of time grouping (e.g., 'W' for weekly, 'M' for monthly).
+
+    Returns
+    -------
+    ani : matplotlib.animation.FuncAnimation
+        Animation object displaying the temporal evolution of subreddit toxicity.
+    """
     # --- Compute period mean outgoing toxicity score per subreddit ---
     period_sentiment = (
         interactions_df[interactions_df['SOURCE_SUBREDDIT'].isin(active_subs)]
@@ -84,6 +133,23 @@ def animate_evolution(active_subs, filtered, freq):
 
 
 def louvain_communities(toxic_df):
+    """
+    Build a directed graph of toxic subreddit interactions and detect communities using
+    the Louvain algorithm.
+
+    Parameters
+    ----------
+    toxic_df : pandas.DataFrame
+        DataFrame containing toxic interactions with at least columns:
+        ['SOURCE_SUBREDDIT', 'TARGET_SUBREDDIT'].
+
+    Returns
+    -------
+    community_df : pandas.DataFrame
+        DataFrame mapping each subreddit to its detected community ID.
+    edges : pandas.DataFrame
+        DataFrame of aggregated toxic edges with weights representing interaction counts.
+    """
     # Aggregate toxic interactions (number of toxic links between subreddits)
     edges = (
         toxic_df.groupby(['SOURCE_SUBREDDIT', 'TARGET_SUBREDDIT'])
@@ -102,7 +168,7 @@ def louvain_communities(toxic_df):
 
     print(f"Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} toxic edges")
 
-    # --- Step 2: Detect communities using Louvain on the undirected version ---
+    # --- Detect communities using Louvain on the undirected version ---
     G_undirected = G.to_undirected()
     partition = community_louvain.best_partition(G_undirected, weight='weight', resolution=0.5)  # use weights to prioritize toxic links
 
@@ -112,7 +178,23 @@ def louvain_communities(toxic_df):
 
 
 def get_toxic_communities(community_df, toxicity_threshold):
-    # Step 3: Compute toxicity per community ---
+    """
+    Compute toxicity levels per community and flag highly toxic ones.
+
+    Parameters
+    ----------
+    community_df : pandas.DataFrame
+        DataFrame mapping subreddits to community IDs (from `louvain_communities`).
+    toxicity_threshold : float
+        Minimum fraction of toxic interactions required for a community to be flagged as toxic.
+
+    Returns
+    -------
+    community_df : pandas.DataFrame
+        Input DataFrame with an additional boolean column 'IS_HIGHLY_TOXIC'
+        indicating which communities exceed the toxicity threshold.
+    """
+    # Compute toxicity per community ---
     # Merge community ID with interactions
     interactions_with_comm = interactions_df.merge(
         community_df, left_on='SOURCE_SUBREDDIT', right_on='SUBREDDIT', how='left'
@@ -125,16 +207,34 @@ def get_toxic_communities(community_df, toxicity_threshold):
         .reset_index()
         .rename(columns={'TOXICITY_CAT': 'TOXIC_FRACTION'})
     )
-    # --- Step 4: Flag highly toxic communities ---
+    # --- Flag highly toxic communities ---
     highly_toxic = community_toxicity[community_toxicity['TOXIC_FRACTION'] > toxicity_threshold]
-    # --- Step 5: Add a flag to community_df ---
+    
+    # --- Add a flag to community_df ---
     community_df['IS_HIGHLY_TOXIC'] = community_df['COMMUNITY_ID'].isin(highly_toxic['COMMUNITY_ID'])
     print(f"Detected {len(highly_toxic)} toxic communities.")
     return community_df
 
 
 def plot_biggest_toxic_community_network(community_df, edges):
-    # --- Step 3b: Compute community sizes in terms of subreddits ---
+    """
+    Plot a weighted directed network graph of the largest highly toxic community.
+
+    Parameters
+    ----------
+    community_df : pandas.DataFrame
+        DataFrame containing subreddit-community assignments and toxicity flags.
+    edges : pandas.DataFrame
+        DataFrame of directed edges with weights representing toxic interaction counts.
+
+    Returns
+    -------
+    None
+        Displays a matplotlib figure of the community network, where:
+        - Node size is constant.
+        - Edge width represents the number of toxic interactions (weight).
+    """
+    # --- Compute community sizes in terms of subreddits ---
     toxic_sizes = (
         community_df[community_df['IS_HIGHLY_TOXIC']]
         .groupby('COMMUNITY_ID')['SUBREDDIT']
@@ -144,7 +244,7 @@ def plot_biggest_toxic_community_network(community_df, edges):
 
     print(toxic_sizes)
 
-    # --- Step 4b: Select the biggest highly toxic community ---
+    # --- Select the biggest highly toxic community ---
     biggest_toxic_comm_id = toxic_sizes.sort_values('SIZE', ascending=False)['COMMUNITY_ID'].iloc[0]
     print(f"Biggest highly toxic community ID: {biggest_toxic_comm_id}")
 
@@ -161,7 +261,7 @@ def plot_biggest_toxic_community_network(community_df, edges):
         edges['TARGET_SUBREDDIT'].isin(subreddits_in_comm)
     ]
 
-    # --- Step 7: Build network graph for the community ---
+    # --- Build network graph for the community ---
     G_comm = nx.from_pandas_edgelist(
         community_edges,
         source='SOURCE_SUBREDDIT',
@@ -170,7 +270,7 @@ def plot_biggest_toxic_community_network(community_df, edges):
         create_using=nx.DiGraph()
     )
 
-    # --- Step 8: Plot the network ---
+    # --- Plot the network ---
     plt.figure(figsize=(12, 10))
     pos = nx.spring_layout(G_comm, seed=42)  # layout
 
