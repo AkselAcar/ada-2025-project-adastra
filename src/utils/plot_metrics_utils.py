@@ -174,7 +174,7 @@ def evaluate_props_norm_diffs(interactions_df, threshold):
     for i in high_props:
         print(f"- (z_diff = {round(avg_z_diffs[i], 3)}) \t {i}")
 
-    print(f"\n Found {len(low_props)} Properties higher for negative links (zΔ < -{threshold}):")
+    print(f"\n Found {len(low_props)} properties higher for negative links (zΔ < -{threshold}):")
     for i in low_props:
         print(f"- (z_diff = {round(avg_z_diffs[i], 3)}) \t {i}")
 
