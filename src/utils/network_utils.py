@@ -1,8 +1,5 @@
-<<<<<<< HEAD
-=======
 # Certain functions in this file were made with the help of AI.
 
->>>>>>> fe955b557a05b60b41bf08f9f40725bf842ccf22
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
