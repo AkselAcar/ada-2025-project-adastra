@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import copy
 from datetime import date
 
@@ -148,7 +150,6 @@ def construct_daily_interaction_df(df, keyword="", time_window=None):
 
     return daily_interactions
 
-
 def construct_neg_interaction_df(df, time_window=None, criteria=None, threshold = None, upper=None, groupby_type="DAY"):
     """
     Constructs the negative interaction count (series or) dataframe based on given dataframe, given criterion,
@@ -247,5 +248,54 @@ def smart_df_add(df1, df2):
     return added_df
 
 
+def plot_daily_interactions(dataframe, day_interval = None, specifier = ""):
+    
+    fig, ax = plt.subplots(figsize=(10,4))
+
+    dataframe.plot(ax = ax)
+
+    if(day_interval != None):
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=day_interval))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+    ax.tick_params(axis="x", rotation=45)
+    ax.set_xlabel("Day")
+    ax.grid(axis="y", linestyle="--", alpha=0.6)
+    ax.set_title(f"{specifier} Interactions over time")
+
+    ax.set_ylabel(f"Number of {specifier} Interactions")
+    plt.tight_layout()
+    plt.show()
 
 
+def plot_top_interactors(interaction_count_df,
+                         x_col, y_cols,
+                         legend,
+                         x_ticklabels,
+                         plot_top = 10):
+    
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    if(x_col == None):
+        interaction_count_df.head(plot_top).plot(
+            y=y_cols,
+            kind="bar",
+            width=0.8,
+            ax=ax
+        )
+    else:
+        interaction_count_df.head(plot_top).plot(
+            x=x_col,
+            y=y_cols,
+            kind="bar",
+            width=0.8,
+            ax=ax
+        )
+
+    ax.set_title("Top " + str(plot_top) + " Subreddits by Number of Interactions", fontsize=14)
+    ax.set_xlabel("Subreddit", fontsize=12)
+    ax.set_ylabel("Number of Interactions", fontsize=12)
+    ax.set_xticklabels(x_ticklabels, rotation=45, ha="right")
+    ax.legend(legend, title="Interaction Type")
+    ax.grid(axis="y", linestyle="--", alpha=0.6)
+    plt.tight_layout()
+    plt.show()

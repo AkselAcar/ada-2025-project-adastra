@@ -1,6 +1,7 @@
 # Certain functions in this file were made with the help of AI.
 
 import pandas as pd
+import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from IPython.display import HTML
@@ -60,6 +61,29 @@ def reduce_embeddings_2d(embeddings_df):
     embeddings_df['y'] = embedding_2d[:, 1]
     return embeddings_df
 
+
+def plot_static_embeddings_with_toxicity(filtered_embeddings_2d, mean_toxicity):
+    
+    # Merge mean toxicity data
+    embeddings_with_toxicity = filtered_embeddings_2d.merge(
+        mean_toxicity, left_on="SUBREDDIT", right_on="SOURCE_SUBREDDIT", right_index=True, how="left"
+    ).fillna(0)
+
+    plt.figure(figsize=(12, 8))
+    sns.scatterplot(
+        data=embeddings_with_toxicity,
+        x="x", y="y",
+        hue="mean_toxicity_score",
+        palette="coolwarm",   
+        s=25,
+        alpha=0.8
+    )
+    plt.title("Subreddit Map (UMAP) - Subreddits with >20 Interactions")
+    plt.xlabel("UMAP Dimension 1")
+    plt.ylabel("UMAP Dimension 2")
+    plt.legend(title="Mean Toxicity Score", bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.show()
 
 def animate_evolution(active_subs, filtered, freq):
     """
