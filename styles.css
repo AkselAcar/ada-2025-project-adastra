@@ -1,0 +1,68 @@
+/* Basic page styling */
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 0;
+  background-color: #fef7ed;
+}
+
+/* Top navigation bar */
+.navbar {
+  position: fixed;        /* Sticks to the top */
+  top: 0;
+  width: 100%;
+  background-color: #ff8c00;
+  padding: 10px 0;
+  text-align: center;
+  z-index: 10;
+}
+
+#main-title {
+  color: blue;
+  padding-top: 150px;   /* Makes it visible below the fixed navbar */
+  text-align: center;
+  padding-bottom: 40px;
+}
+
+#main-title h1 {
+  color: red;
+  font-size: 3.5rem;   /* Bigger title */
+  font-weight: bold;
+  margin: 0 auto;
+}
+
+img {
+  width: 300px;        /* Resize image */
+  display: block;      /* Allows centering */
+  margin: 20px auto;   /* Auto margins for centering */
+  border-radius: 10px; /* Optional rounded corners */
+}
+
+.navbar a {
+  color: white;
+  text-decoration: none;
+  margin: 0 15px;
+  font-size: 1.1rem;
+}
+
+.navbar a:hover {
+  text-decoration: underline;
+}
+
+.navbar a.active {
+  background-color: #ffdd55;
+  color: black;
+  font-weight: bold;
+}
+
+/* Add spacing so sections don't hide behind fixed navbar */
+section {
+  padding: 80px 20px 40px; /* extra top padding */
+  max-width: 900px;
+  margin: auto;
+}
+
+section h1 {
+  text-align: center;
+  margin-bottom: 20px;
+}
