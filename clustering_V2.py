@@ -1,0 +1,1625 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import RobustScaler
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, adjusted_rand_score
+from scipy import stats
+
+
+def preliminary_control(df: pd.DataFrame) -> pd.DataFrame: 
+    """
+    This function ensures that the dataframe has the necessary toxicity score column.
+
+    Parameters:
+    df (pd.DataFrame): Input dataframe with interactions data.
+
+    Returns:
+    pd.DataFrame: Dataframe with ensured toxicity score column.
+    """
+    try:
+        import umap
+        umap_available = True
+    except Exception:
+        umap_available = False
+
+    try:
+        import hdbscan
+        hdbscan_available = True
+    except Exception:
+        hdbscan_available = False
+
+    # We check if TOXICITY_SCORE column exists, if not we create it
+    if "TOXICITY_SCORE" not in df.columns:
+        df = compute_toxicity_score(df)
+
+    # We check if TOXICITY_CAT column exists, if not we create it
+    if "TOXICITY_CAT" not in df.columns:
+        # We check if a global threshold variable exists, if not we use the 75th percentile of the TOXICITY_SCORE
+        if "TOXICITY_THRESHOLD" in globals():
+            toxicity_threshold = TOXICITY_THRESHOLD
+        else:
+            toxicity_threshold = df["TOXICITY_SCORE"].quantile(0.75)
+        df["TOXICITY_CAT"] = (df["TOXICITY_SCORE"] >= toxicity_threshold).astype(int)
+
+    return df, umap_available, hdbscan_available
+
+df, umap_available, hdbscan_available = preliminary_control(interactions_df)
+
+# ====================
+# FEATURE ENGINEERING
+# ====================
+
+def median_gap_days(ts: pd.Series) -> float:
+    """
+    This function calculates the median gap in days between consecutive timestamps in a pandas Series.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+
+    Returns:
+    float: The median gap in days between consecutive timestamps. Returns np.nan if not computable.
+    """
+    # We ensure datetime type, drop missing values and sort in ascending order.
+    ts_sorted = pd.to_datetime(ts, errors='coerce').dropna().sort_values()
+    # If we have less than 2 timestamps, we cannot compute gaps, so we return np.nan
+    if len(ts_sorted) < 2:
+        return np.nan
+    # Remove duplicate timestamps (if multiple identical events, we should not generate a gap of 0)
+    ts_sorted = ts_sorted.drop_duplicates()
+    if len(ts_sorted) < 2:
+        return np.nan
+    # We compute the difference between each timestamp and the previous one (in seconds) and then convert it to days
+    deltas = ts_sorted.diff().dt.total_seconds() / 86400.0
+    return float(deltas.dropna().median())
+
+
+def gap_std(ts: pd.Series) -> float:
+    """
+    This function calculates the standard deviation of gaps in days between consecutive timestamps in a pandas Series.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+
+    Returns:
+    float: The standard deviation of gaps in days between consecutive timestamps. Returns np.nan if not
+    """
+    # We ensure datetime type, drop missing values, sort in ascending order and remove duplicates.
+    ts_sorted = pd.to_datetime(ts, errors='coerce').dropna().sort_values().drop_duplicates()
+    # If we have less than 2 timestamps, we cannot compute gaps, so we return np.nan
+    if len(ts_sorted) < 2:
+        return np.nan
+    # We compute the difference between each timestamp and the previous one (in seconds) and then convert it to days
+    deltas_days = ts_sorted.diff().dt.total_seconds() / 86400
+    return float(deltas_days.dropna().std(ddof=0))  # With ddof=0, the std of a single value is 0.0 (which is reasonable: no variation if only one gap)
+    
+
+def toxicity_trend(ts: pd.Series) -> float:
+    """
+    This function returns the slope of toxic event count over time (events/day) using regression.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+
+    Returns:
+    float: The slope of toxic event count over time. Returns np.nan if not computable
+    """
+    # We ensure datetime type, drop missing values, sort in ascending order and remove duplicates.
+    ts_sorted = pd.to_datetime(ts, errors='coerce').dropna().sort_values().drop_duplicates()
+    # If we have less than 3 timestamps, we cannot compute a trend, so we return np.nan
+    if len(ts_sorted) < 3:
+        return np.nan
+
+    # We convert to days since first event happened
+    days = (ts_sorted - ts_sorted.min()).dt.total_seconds() / 86400.0
+    # Cumulative count
+    counts = np.arange(1, len(ts_sorted) + 1)  
+    
+    # We check if all days are the same (should not happen due to previous checks, but just in case)
+    # If all days are the same, we cannot compute a slope 
+    if np.allclose(days.values, days.values[0]):
+        return np.nan
+
+    try:
+        # We use Theil-Sen estimator for robustness to compute the slope as Theil-Sen is 
+        # more robust to outliers and non-normal data than simple linear regression
+        slope, _, _, _ = stats.theilslopes(counts, days.values, 0.95)
+        return float(slope)
+    except Exception:
+        # We fallback to linear regression if Theil-Sen fails
+        try:
+            slope, _, _, _, _ = stats.linregress(days.values, counts)
+            return float(slope)
+        except Exception:
+            return np.nan
+
+
+def days_since_last(ts: pd.Series, reference_date: pd.Timestamp) -> float:
+    """
+    This function calculates the number of days since the last timestamp in the series relative to a reference date.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+    reference_date (pd.Timestamp): The reference date to calculate recency from.
+
+    Returns:
+    float: The number of days since the last timestamp. Returns np.nan if not computable
+    """
+    # We ensure datetime type and drop missing values.
+    ts_filtered = pd.to_datetime(ts, errors="coerce").dropna()
+    # If the series is empty or reference_date is NaT, return np.nan
+    if ts_filtered.empty or pd.isna(reference_date):
+        return np.nan
+    last = ts_filtered.max()
+    delta = reference_date - last
+    return float(delta.total_seconds() / 86400.0) # Convert time delta to days
+
+
+def max_events_in_window(ts: pd.Series, window_days: int = 30) -> int:
+    """
+    This function returns the maximum number of events (equivalent to timestamps) contained in any sliding window of window_days.
+    
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+    window_days (int): The size of the sliding window in days.
+
+    Returns:
+    int: The maximum number of events in any sliding window of the specified size.
+    """
+    if window_days <= 0:
+        raise ValueError("window_days must be positive")
+
+    # We ensure datetime type, drop missing values and sort in ascending order.
+    ts_sorted = pd.to_datetime(ts, errors="coerce", utc=True).dropna().sort_values().reset_index(drop=True)
+    if ts_sorted.empty:
+        return 0
+
+    # We use a two-pointer technique to find the maximum number of events in any window
+    window = pd.Timedelta(days=int(window_days))
+    left = 0
+    max_count = 0
+
+    # Two-pointer sliding window approach
+    for right in range(len(ts_sorted)):
+        # Move the right pointer forward one event at a time (expanding the window)
+        # For each new right, check if the window [left, right] is within the allowed window size
+        # If the time difference between the rightmost and leftmost timestamps exceeds the window,
+        # move the left pointer forward to shrink the window until it fits
+        while left <= right and (ts_sorted.iloc[right] - ts_sorted.iloc[left]) > window:
+            # The window is too large, so increment left to shrink it
+            left += 1
+        # After adjusting, the window [left, right] now fits within window_days
+        curr = right - left + 1  # Number of events in the current window
+        # Update max_count if this window contains more events than any previous window
+        if curr > max_count:
+            max_count = curr
+
+    return int(max_count)
+
+
+def recent_activity(ts: pd.Series, recent_days: int = 90, cap: float = 10.0) -> float:
+    """
+    This function calculates the ratio of recent event rate to historical event rate.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+    recent_days (int): The number of days to consider as the recent period.
+
+    Returns:
+    float: The ratio of recent event rate to historical event rate, capped at 10.0. Returns np.nan if not computable.
+    """
+    if recent_days <= 0:
+        raise ValueError("recent_days must be positive")
+
+    # We ensure datetime type, drop missing values and sort in ascending order.
+    ts_sorted = pd.to_datetime(ts, errors="coerce", utc=True).dropna().sort_values()
+    if len(ts_sorted) < 4:
+        return np.nan  # We don't have enough data to compute a stable ratio
+
+    # We define cutoff as being the start of the recent window
+    cutoff = ts_sorted.max() - pd.Timedelta(days=int(recent_days))
+
+    # The recent window starts either at cutoff or at the dataset's min if the dataset is shorter
+    # recent_start = max(cutoff, ts_sorted.min())
+    # recent_span_days = (ts_sorted.max() - recent_start).total_seconds() / 86400.0
+    # recent_span_days = max(recent_span_days, 1.0)  # To avoid zero-division, we treat same-day span as 1 day
+
+    recent_count = int((ts_sorted >= cutoff).sum())
+    historical_count = int((ts_sorted < cutoff).sum())
+
+    # If there's no historical data, we cannot compute a ratio, so we return np.nan
+    if historical_count == 0:
+        return np.nan 
+
+    # We compute the number of days in historical period (i.e., from first event to cutoff)
+    historical_days = (cutoff - ts_sorted.min()).total_seconds() / 86400.0
+    if historical_days <= 0:
+        return np.nan # Degenerate case
+
+    # We compute rates as recent events per recent days and historical events per historical days
+    recent_rate = recent_count / float(recent_days) # float(recent_span_days)
+    historical_rate = historical_count / float(historical_days)
+
+    if historical_rate <= 0:
+        return np.nan # Degenerate case
+
+    ratio = recent_rate / historical_rate
+    return float(min(ratio, float(cap)))
+
+
+# ====================
+# ROLE-AWARE FEATURE EXTRACTION
+# ====================
+
+# We build separate features for source (aggressor) and target (victim) roles
+toxic_df = interactions_df[interactions_df["TOXICITY_CAT"] == 1].copy()
+
+# We extract the most recent day as reference for recency calculations
+reference_date = toxic_df["TIMESTAMP"].max()
+
+print("\n" + "="*60)
+print("COMPUTING ROLE-AWARE TEMPORAL FEATURES")
+print("="*60)
+
+# ===== SOURCE FEATURES (subreddit as aggressor) =====
+print("\nComputing SOURCE (aggressor) features...")
+
+def comp_source_features(toxic_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function computes source (aggressor) features for subreddits.
+
+    Parameters:
+    toxic_df (pd.DataFrame): Dataframe containing toxic interactions with TIMESTAMP, SOURCE_SUBREDDIT, TARGET_SUBREDDIT columns.
+
+    Returns:
+    pd.DataFrame: Dataframe with computed source features for each subreddit.
+    """
+    # We remove any rows with missing SOURCE_SUBREDDIT to build source features
+    source_df = toxic_df[["TIMESTAMP", "SOURCE_SUBREDDIT", "TARGET_SUBREDDIT"]].dropna(subset=["SOURCE_SUBREDDIT"])
+    grp_src = source_df.groupby("SOURCE_SUBREDDIT")
+
+    # We compute source features for each subreddit
+    source_features = pd.DataFrame({
+        "src_tox_count": grp_src["TIMESTAMP"].size(),
+        "src_first_tox_ts": grp_src["TIMESTAMP"].min(),
+        "src_last_tox_ts": grp_src["TIMESTAMP"].max(),
+    })
+
+    source_features["src_active_span_days"] = (
+        (source_features["src_last_tox_ts"] - source_features["src_first_tox_ts"])
+        .dt.total_seconds() / 86400
+    )
+
+    source_features["src_median_gap_days"] = grp_src["TIMESTAMP"].apply(median_gap_days)
+    source_features["src_gap_std"] = grp_src["TIMESTAMP"].apply(gap_std)
+    source_features["src_max_30d_count"] = grp_src["TIMESTAMP"].apply(
+        lambda s: max_events_in_window(s, window_days=30)
+    )
+    source_features["src_toxicity_trend"] = grp_src["TIMESTAMP"].apply(toxicity_trend)
+    source_features["src_days_since_last"] = grp_src["TIMESTAMP"].apply(
+        lambda s: days_since_last(s, reference_date)
+    )
+    source_features["src_recent_acceleration"] = grp_src["TIMESTAMP"].apply(recent_activity)
+    return source_df, source_features
+
+source_df, source_features = comp_source_features(toxic_df)
+print(f"  SOURCE features computed for {len(source_features)} subreddits")
+
+# ===== TARGET FEATURES (subreddit as victim) =====
+# Here we perfom the same oerations as above but for target subreddits
+print("\nComputing TARGET (victim) features...")
+
+def comp_target_features(toxic_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function computes target (victim) features for subreddits.
+
+    Parameters:
+    toxic_df (pd.DataFrame): Dataframe containing toxic interactions with TIMESTAMP, SOURCE_SUBREDDIT, TARGET_SUBREDDIT columns.
+
+    Returns:
+    pd.DataFrame: Dataframe with computed target features for each subreddit.
+    """
+    target_df = toxic_df[["TIMESTAMP", "SOURCE_SUBREDDIT", "TARGET_SUBREDDIT"]].dropna(subset=["TARGET_SUBREDDIT"])
+    grp_tgt = target_df.groupby("TARGET_SUBREDDIT")
+
+    target_features = pd.DataFrame({
+        "tgt_tox_count": grp_tgt["TIMESTAMP"].size(),
+        "tgt_first_tox_ts": grp_tgt["TIMESTAMP"].min(),
+        "tgt_last_tox_ts": grp_tgt["TIMESTAMP"].max(),
+    })
+
+    target_features["tgt_active_span_days"] = (
+        (target_features["tgt_last_tox_ts"] - target_features["tgt_first_tox_ts"])
+        .dt.total_seconds() / 86400
+    )
+
+    target_features["tgt_median_gap_days"] = grp_tgt["TIMESTAMP"].apply(median_gap_days)
+    target_features["tgt_gap_std"] = grp_tgt["TIMESTAMP"].apply(gap_std)
+    target_features["tgt_max_30d_count"] = grp_tgt["TIMESTAMP"].apply(
+        lambda s: max_events_in_window(s, window_days=30)
+    )
+    target_features["tgt_toxicity_trend"] = grp_tgt["TIMESTAMP"].apply(toxicity_trend)
+    target_features["tgt_days_since_last"] = grp_tgt["TIMESTAMP"].apply(
+        lambda s: days_since_last(s, reference_date)
+    )
+    target_features["tgt_recent_acceleration"] = grp_tgt["TIMESTAMP"].apply(recent_activity)
+    return target_df, target_features
+
+target_df, target_features = comp_target_features(toxic_df)
+print(f"  TARGET features computed for {len(target_features)} subreddits")
+
+# ===== NETWORK FEATURES =====
+print("\nComputing NETWORK features...")
+
+# We compute the out-degree as the number of unique subreddits one attacks
+out_degree = source_df.groupby("SOURCE_SUBREDDIT")["TARGET_SUBREDDIT"].nunique().rename("net_out_degree")
+
+# We compute the in-degree as the number of unique subreddits that attack one
+in_degree = target_df.groupby("TARGET_SUBREDDIT")["SOURCE_SUBREDDIT"].nunique().rename("net_in_degree")
+
+def compute_reciprocity(toxic_df: pd.DataFrame,subreddit_name: str) -> float:
+    """
+    This function computes the fraction of outgoing toxic edges that are reciprocated
+    
+    Parameters:
+    toxic_df (pd.DataFrame): Dataframe containing toxic interactions with SOURCE_SUBREDDIT and TARGET_SUBREDDIT columns.
+    subreddit_name (str): The name of the subreddit to compute reciprocity for.
+
+    Returns:
+    float: The reciprocity value (0.0 to 1.0) for the subreddit.
+    """
+    # We compute reciprocity: for each source->target pair, we check if target->source pair also exists
+    edges = toxic_df[["SOURCE_SUBREDDIT", "TARGET_SUBREDDIT"]].dropna()
+    edges_set = set(zip(edges["SOURCE_SUBREDDIT"], edges["TARGET_SUBREDDIT"]))
+    
+    outgoing = edges[edges["SOURCE_SUBREDDIT"] == subreddit_name]["TARGET_SUBREDDIT"].unique()
+    if len(outgoing) == 0:
+        return 0.0
+    
+    # Count how many outgoing edges also exist in the opposite direction
+    reciprocated = sum(1 for target in outgoing if (target, subreddit_name) in edges_set)
+
+    # Reciprocity is the fraction of outgoing edges that are reciprocated
+    return reciprocated / len(outgoing)
+
+# We get all unique subreddits involved in toxic interactions
+all_subreddits = set(source_df["SOURCE_SUBREDDIT"].unique()) | set(target_df["TARGET_SUBREDDIT"].unique())
+
+# We compute reciprocity for each subreddit
+reciprocity = pd.Series({sub: compute_reciprocity(toxic_df, sub) for sub in all_subreddits}, name="net_reciprocity")
+
+print(f"  NETWORK features computed for {len(all_subreddits)} subreddits")
+
+# ===== MERGE ALL FEATURES =====
+print("\nMerging role-aware and network features...")
+
+def merge_all_features(source_features: pd.DataFrame, target_features: pd.DataFrame, 
+                       out_degree: pd.Series, in_degree: pd.Series, reciprocity: pd.Series) -> pd.DataFrame:
+    """
+    This function merges source, target, and network features into a single dataframe.
+
+    Parameters:
+    source_features (pd.DataFrame): Dataframe with source features.
+    target_features (pd.DataFrame): Dataframe with target features.
+    out_degree (pd.Series): Series with out-degree network feature.
+    in_degree (pd.Series): Series with in-degree network feature.
+    reciprocity (pd.Series): Series with reciprocity network feature.
+
+    Returns:
+    temporal_features(pd.DataFrame): Dataframe with all merged features.
+    """
+    # We merge source, target, and network features into a single dataframe
+    temporal_features = source_features.join(target_features, how="outer")
+    temporal_features = temporal_features.join(out_degree, how="outer")
+    temporal_features = temporal_features.join(in_degree, how="outer")
+    temporal_features = temporal_features.join(reciprocity, how="outer")
+
+    temporal_features.fillna(0, inplace=True)
+
+    # We compute compute derived features
+    temporal_features["net_toxicity"] = temporal_features["src_tox_count"] - temporal_features["tgt_tox_count"]
+    temporal_features["total_tox_count"] = temporal_features["src_tox_count"] + temporal_features["tgt_tox_count"]
+
+    return temporal_features
+
+temporal_features = merge_all_features(source_features, target_features, out_degree, in_degree, reciprocity)
+print(f"\nTotal subreddits before filtering: {len(temporal_features)}")
+
+# ====================
+# CRITICAL: FILTER LOW-ACTIVITY SUBREDDITS (TO BE DISCUSSED)
+# ====================
+
+def filter_low_activity(temporal_features: pd.DataFrame, min_toxic_events: int = 10) -> pd.DataFrame:
+    """
+    This function filters out subreddits with total toxic events below a specified threshold.
+
+    Parameters:
+    temporal_features (pd.DataFrame): Dataframe with all merged features.
+    min_toxic_events (int): Minimum number of total toxic events required to keep a subreddit.
+
+    Returns:
+    pd.DataFrame: Filtered dataframe with subreddits meeting the activity threshold.
+    """
+    filtered_features = temporal_features[temporal_features["total_tox_count"] >= min_toxic_events].copy()
+    
+    return filtered_features
+
+temporal_features = filter_low_activity(temporal_features, min_toxic_events=10)
+print(f"Subreddits after filtering (>= 10 total toxic events): {len(temporal_features)}")
+
+# ====================
+# NaN HANDLING
+# ====================
+
+def temporal_nan_handling(temporal_features: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function handles NaN values in temporal features according to specified rules.
+
+    Parameters:
+    temporal_features (pd.DataFrame): Dataframe with all merged features.
+
+    Returns:
+    pd.DataFrame: Dataframe with NaN values handled.
+    """    
+    # For temporal gap metrics, we replace 0 with median of non-zero values
+    for prefix in ["src", "tgt"]:
+        for col in ["median_gap_days", "gap_std"]:
+            full_col = f"{prefix}_{col}"
+            if full_col in temporal_features.columns:
+                median_val = temporal_features[full_col].replace(0, np.nan).median()
+                temporal_features[full_col] = temporal_features[full_col].replace(0, median_val)
+
+    return temporal_features
+
+
+def other_nan_handling(temporal_features: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function handles NaN values in non-temporal features according to specified rules.
+
+    Parameters:
+    temporal_features (pd.DataFrame): Dataframe with all merged features.
+
+    Returns:
+    pd.DataFrame: Dataframe with NaN values handled.
+    """
+    # For other metrics, we handle NaNs as follows
+    for prefix in ["src", "tgt"]:
+        for col in ["days_since_last", "recent_activity", "toxicity_trend"]:
+            full_col = f"{prefix}_{col}"
+            if full_col in temporal_features.columns:
+                if "days_since_last" in col:
+                    temporal_features[full_col] = temporal_features[full_col].replace(0, np.nan).fillna(
+                        temporal_features[full_col].replace(0, np.nan).median()
+                    )
+                elif "acceleration" in col:
+                    temporal_features[full_col] = temporal_features[full_col].replace(0, 1.0)
+                elif "trend" in col:
+                    temporal_features[full_col] = temporal_features[full_col].fillna(0)
+    
+    return temporal_features
+
+temporal_features = temporal_nan_handling(temporal_features)
+temporal_features = other_nan_handling(temporal_features)
+
+# ====================
+# DIAGNOSTIC: Check for extreme outliers
+# ====================
+print("\n" + "="*60)
+print("EXTREME VALUE DIAGNOSTICS")
+print("="*60)
+
+def check_extreme_outliers(temporal_features: pd.DataFrame):
+    """
+    This function checks for extreme outliers in specified columns of the temporal features dataframe.
+
+    Parameters:
+    temporal_features (pd.DataFrame): Dataframe with all merged features.
+    """
+    diag_cols = ["src_toxicity_trend", "src_recent_acceleration", 
+                "tgt_toxicity_trend", "tgt_recent_acceleration",
+                "net_toxicity", "net_in_degree", "net_out_degree"]
+    for col in diag_cols:
+        if col in temporal_features.columns:
+            p99 = temporal_features[col].quantile(0.99)
+            # For each feature, we identify subreddits above 99th percentile
+            # Those subreddits are considered extreme outliers for diagnostics
+            extreme = temporal_features[temporal_features[col] > p99]
+            print(f"\n{col}:")
+            print(f"  99th percentile: {p99:.2f}")
+            print(f"  Max value: {temporal_features[col].max():.2f}")
+            print(f"  N extreme (>99th): {len(extreme)}")
+            if len(extreme) <= 10:
+                print(f"  Extreme subreddits: {list(extreme.index[:10])}")
+
+check_extreme_outliers(temporal_features)
+
+# ====================
+# OUTLIER HANDLING WITH LOG TRANSFORM
+# ====================
+
+# We select features for clustering
+feature_cols = [
+    # Source (aggressor) features
+    "src_tox_count",
+    "src_active_span_days",
+    "src_median_gap_days",
+    "src_gap_std",
+    "src_max_30d_count",
+    "src_toxicity_trend",
+    "src_days_since_last",
+    "src_recent_acceleration",
+    # Target (victim) features
+    "tgt_tox_count",
+    "tgt_active_span_days",
+    "tgt_median_gap_days",
+    "tgt_gap_std",
+    "tgt_max_30d_count",
+    "tgt_toxicity_trend",
+    "tgt_days_since_last",
+    "tgt_recent_acceleration",
+    # Network features
+    "net_in_degree",
+    "net_out_degree",
+    "net_reciprocity",
+    "net_toxicity",
+]
+
+features = temporal_features[feature_cols].copy()
+
+# ====================
+# NaN IMPUTATION IMPACT REPORT
+# ====================
+print("\n" + "="*60)
+print("NaN IMPUTATION IMPACT REPORT")
+print("="*60)
+
+def report_nan_impact(temporal_features: pd.DataFrame, feature_cols: list):
+    """
+    This function reports the percentage of NaN values before imputation and documents imputation choices.
+    
+    Parameters:
+    temporal_features (pd.DataFrame): Dataframe with all merged features after imputation.
+    feature_cols (list): List of feature column names.
+    """
+    # We define the imputation strategy used for each feature category
+    imputation_strategy = {
+        "gap_metrics": "Replaced 0 with median of non-zero values",
+        "days_since_last": "Replaced 0 with median of non-zero values",
+        "acceleration": "Replaced 0 with 1.0 (neutral baseline)",
+        "trend": "Filled NaN with 0 (no trend)",
+        "other": "Filled remaining NaN with feature median"
+    }
+    
+    print("\nImputation strategy by feature category:")
+    for category, strategy in imputation_strategy.items():
+        print(f"  {category}: {strategy}")
+    
+    # We note: actual NaN percentages would need to be tracked before imputation
+    # This is a reminder that the analysis was performed post-hoc
+    print("\nNote: Current implementation does not track NaN percentages before imputation.")
+    print("Recommendation: Add NaN tracking in future iterations for full transparency.")
+
+report_nan_impact(temporal_features, feature_cols)
+
+# ====================
+# FEATURE CORRELATION AND MULTICOLLINEARITY ANALYSIS
+# ====================
+print("\n" + "="*60)
+print("FEATURE CORRELATION AND MULTICOLLINEARITY ANALYSIS")
+print("="*60)
+
+def compute_feature_correlations(features: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function computes the correlation matrix for features and identifies highly correlated pairs.
+    
+    Parameters:
+    features (pd.DataFrame): Dataframe with features before transformation.
+    
+    Returns:
+    pd.DataFrame: Correlation matrix.
+    """
+    # We compute Pearson correlation matrix
+    corr_matrix = features.corr(method='pearson')
+    
+    # We identify highly correlated feature pairs (|r| > 0.8)
+    high_corr_pairs = []
+    for i in range(len(corr_matrix.columns)):
+        for j in range(i+1, len(corr_matrix.columns)):
+            if abs(corr_matrix.iloc[i, j]) > 0.8:
+                high_corr_pairs.append((
+                    corr_matrix.columns[i],
+                    corr_matrix.columns[j],
+                    corr_matrix.iloc[i, j]
+                ))
+    
+    if high_corr_pairs:
+        print("\nHighly correlated feature pairs (|r| > 0.8):")
+        for feat1, feat2, r in high_corr_pairs:
+            print(f"  {feat1} <-> {feat2}: r={r:.3f}")
+    else:
+        print("\nNo highly correlated feature pairs found (|r| > 0.8)")
+    
+    return corr_matrix
+
+def compute_vif(features: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function computes Variance Inflation Factor (VIF) for each feature to detect multicollinearity.
+    
+    Parameters:
+    features (pd.DataFrame): Dataframe with features before transformation.
+    
+    Returns:
+    pd.DataFrame: Dataframe with VIF scores for each feature.
+    """
+    from sklearn.linear_model import LinearRegression
+    
+    vif_data = []
+    # We compute VIF for each feature by regressing it against all other features
+    for i, col in enumerate(features.columns):
+        # We use all other features as predictors
+        X = features.drop(columns=[col]).values
+        y = features[col].values
+        
+        # We fit linear regression
+        lr = LinearRegression()
+        lr.fit(X, y)
+        r_squared = lr.score(X, y)
+        
+        # We compute VIF = 1 / (1 - R²)
+        # VIF > 10 indicates severe multicollinearity, VIF > 5 suggests investigation
+        vif = 1 / (1 - r_squared) if r_squared < 0.9999 else np.inf
+        vif_data.append({'feature': col, 'VIF': vif})
+    
+    vif_df = pd.DataFrame(vif_data).sort_values('VIF', ascending=False)
+    
+    print("\nVariance Inflation Factor (VIF) scores:")
+    print("  (VIF > 10 = severe multicollinearity, VIF > 5 = moderate)")
+    for _, row in vif_df.head(10).iterrows():
+        flag = "⚠️ HIGH" if row['VIF'] > 10 else "⚠️ MOD" if row['VIF'] > 5 else "✓"
+        print(f"  {row['feature']:30s}: {row['VIF']:7.2f} {flag}")
+    
+    return vif_df
+
+# We perform correlation and VIF analysis
+corr_matrix = compute_feature_correlations(features)
+vif_scores = compute_vif(features)
+
+# ====================
+# ITERATIVE VIF-BASED FEATURE REDUCTION
+# ====================
+print("\n" + "="*60)
+print("ITERATIVE VIF-BASED FEATURE REDUCTION")
+print("="*60)
+
+def remove_high_vif_features(features: pd.DataFrame, threshold: float = 10.0, max_iterations: int = 20) -> pd.DataFrame:
+    """
+    This function iteratively removes features with VIF above threshold until all features have acceptable VIF.
+    
+    Parameters:
+    features (pd.DataFrame): Dataframe with features before transformation.
+    threshold (float): VIF threshold above which features are removed (default: 10.0).
+    max_iterations (int): Maximum number of iterations to prevent infinite loops.
+    
+    Returns:
+    pd.DataFrame: Dataframe with high-VIF features removed.
+    """
+    from sklearn.linear_model import LinearRegression
+    
+    features_reduced = features.copy()
+    removed_features = []
+    iteration = 0
+    
+    print(f"\nRemoving features with VIF > {threshold}:")
+    print(f"  Starting with {len(features_reduced.columns)} features")
+    
+    while iteration < max_iterations:
+        iteration += 1
+        
+        # We compute VIF for all current features
+        vif_data = []
+        for col in features_reduced.columns:
+            X = features_reduced.drop(columns=[col]).values
+            y = features_reduced[col].values
+            
+            lr = LinearRegression()
+            lr.fit(X, y)
+            r_squared = lr.score(X, y)
+            
+            # We compute VIF = 1 / (1 - R²)
+            vif = 1 / (1 - r_squared) if r_squared < 0.9999 else np.inf
+            vif_data.append({'feature': col, 'VIF': vif})
+        
+        vif_df = pd.DataFrame(vif_data).sort_values('VIF', ascending=False)
+        
+        # We find the feature with highest VIF
+        max_vif_feature = vif_df.iloc[0]['feature']
+        max_vif_value = vif_df.iloc[0]['VIF']
+        
+        # We stop if all VIF values are below threshold
+        if max_vif_value <= threshold:
+            print(f"\n✓ All features now have VIF ≤ {threshold}")
+            break
+        
+        # We remove the feature with highest VIF
+        print(f"  Iteration {iteration}: Removing '{max_vif_feature}' (VIF={max_vif_value:.2f})")
+        features_reduced = features_reduced.drop(columns=[max_vif_feature])
+        removed_features.append((max_vif_feature, max_vif_value))
+    
+    if iteration >= max_iterations:
+        print(f"\n⚠️  Warning: Reached maximum iterations ({max_iterations})")
+    
+    print(f"\nFeature reduction summary:")
+    print(f"  Features removed: {len(removed_features)}")
+    print(f"  Features remaining: {len(features_reduced.columns)}")
+    
+    if removed_features:
+        print(f"\nRemoved features (in order):")
+        for feat, vif_val in removed_features:
+            print(f"  - {feat:30s} (VIF={vif_val:.2f})")
+    
+    return features_reduced, removed_features
+
+# We apply VIF-based feature reduction
+features_reduced, removed_features = remove_high_vif_features(features, threshold=10.0)
+
+# We update feature_cols to reflect removed features
+feature_cols = list(features_reduced.columns)
+features = features_reduced.copy()
+
+print(f"\nUpdated feature list ({len(feature_cols)} features):")
+for i, col in enumerate(feature_cols, 1):
+    print(f"  {i:2d}. {col}")
+
+# ====================
+# FINAL VIF VERIFICATION
+# ====================
+print("\n" + "="*60)
+print("FINAL VIF VERIFICATION (After Feature Reduction)")
+print("="*60)
+
+def verify_final_vif(features: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function computes and displays final VIF scores after feature reduction to verify multicollinearity is resolved.
+    
+    Parameters:
+    features (pd.DataFrame): Dataframe with reduced features.
+    
+    Returns:
+    pd.DataFrame: Dataframe with final VIF scores.
+    """
+    from sklearn.linear_model import LinearRegression
+    
+    vif_data = []
+    for col in features.columns:
+        X = features.drop(columns=[col]).values
+        y = features[col].values
+        
+        lr = LinearRegression()
+        lr.fit(X, y)
+        r_squared = lr.score(X, y)
+        
+        vif = 1 / (1 - r_squared) if r_squared < 0.9999 else np.inf
+        vif_data.append({'feature': col, 'VIF': vif})
+    
+    vif_df = pd.DataFrame(vif_data).sort_values('VIF', ascending=False)
+    
+    print(f"\nFinal VIF scores for all {len(features.columns)} remaining features:")
+    print("  (All should be ≤ 10.0 for acceptable multicollinearity)")
+    
+    all_acceptable = True
+    for _, row in vif_df.iterrows():
+        if row['VIF'] > 10:
+            flag = "⚠️ HIGH"
+            all_acceptable = False
+        elif row['VIF'] > 5:
+            flag = "⚠️ MOD"
+        else:
+            flag = "✓"
+        print(f"  {row['feature']:30s}: {row['VIF']:7.2f} {flag}")
+    
+    if all_acceptable:
+        print(f"\n✓ SUCCESS: All features have VIF ≤ 10.0")
+        print(f"  Multicollinearity has been successfully resolved!")
+    else:
+        print(f"\n⚠️  WARNING: Some features still have VIF > 10.0")
+    
+    return vif_df
+
+final_vif_scores = verify_final_vif(features)
+
+# Log-transform count-based columns to reduce effect of outliers
+log_cols = [
+    "src_tox_count", "src_active_span_days", "src_median_gap_days", "src_gap_std", 
+    "src_max_30d_count", "src_days_since_last",
+    "tgt_tox_count", "tgt_active_span_days", "tgt_median_gap_days", "tgt_gap_std", 
+    "tgt_max_30d_count", "tgt_days_since_last",
+    "net_in_degree", "net_out_degree"
+]
+for col in log_cols:
+    if col in features.columns:
+        features[col] = np.log1p(features[col])  # log1p handles 0 values
+
+# We only apply winsorization for non-logged features (trends, ratios, net_toxicity)
+# Note: We don't winsorize log-transformed features since log already handles outliers
+winsorize_cols_90 = ["net_toxicity"]  # net_toxicity is not log-transformed, needs capping
+winsorize_cols_95 = [
+    "src_toxicity_trend", "src_recent_acceleration",
+    "tgt_toxicity_trend", "tgt_recent_acceleration",
+    "net_reciprocity"
+]
+
+def apply_winsorization(features: pd.DataFrame, cols: list, percentile: float):
+    """
+    This function applies winsorization to specified columns of the features dataframe.
+
+    Parameters:
+    features (pd.DataFrame): Dataframe with features.
+    cols (list): List of column names to apply winsorization to.
+    percentile (float): The percentile threshold for winsorization (e.g., 0.90 for 90th percentile).
+
+    Returns:
+    features(pd.DataFrame): Dataframe with winsorized features.
+    """
+    for col in cols:
+        if col in features.columns:
+            p_thresh = features[col].quantile(percentile)
+            features[col] = features[col].clip(upper=p_thresh)
+            print(f"Winsorized {col} at {int(percentile*100)}th percentile: {p_thresh:.2f}")
+    return features
+
+features = apply_winsorization(features, winsorize_cols_90, 0.90)
+features = apply_winsorization(features, winsorize_cols_95, 0.95)
+
+# CRITICAL: we replace any remaining inf/nan values before scaling
+def handle_inf_nan(features: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function replaces inf values with NaN and fills NaN values with median of each column.
+
+    Parameters:
+    features (pd.DataFrame): Dataframe with features.
+
+    Returns:
+    features(pd.DataFrame): Dataframe with inf and NaN values handled.
+    """
+    features.replace([np.inf, -np.inf], np.nan, inplace=True)
+    features.fillna(features.median(), inplace=True)
+    return features
+
+features = handle_inf_nan(features)
+
+# ====================
+# REMOVE EXTREME OUTLIERS BEFORE CLUSTERING
+# ====================
+
+# We remove subreddits with extreme network involvement (top 1%)
+print(f"\nRemoving extreme network outliers...")
+print(f"  Subreddits before outlier removal: {len(temporal_features)}")
+
+def remove_extreme_outliers(temporal_features: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function identifies and removes extreme outliers based on network features.
+
+    Parameters:
+    temporal_features (pd.DataFrame): Dataframe with all merged features.
+    features (pd.DataFrame): Dataframe with features.
+
+    Returns:
+    temporal_features(pd.DataFrame): Dataframe with extreme outliers removed.
+    features(pd.DataFrame): Dataframe with features corresponding to non-outlier subreddits.
+    outlier_subreddits(pd.DataFrame): Dataframe with identified outlier subreddits.
+    outlier_features(pd.DataFrame): Dataframe with features corresponding to outlier subreddits.
+    """
+
+    # We identify extreme outliers (>99th percentile on network features)
+    outlier_mask = (
+        (temporal_features["net_in_degree"] > temporal_features["net_in_degree"].quantile(0.99)) |
+        (temporal_features["net_out_degree"] > temporal_features["net_out_degree"].quantile(0.99)) |
+        (temporal_features["total_tox_count"] > temporal_features["total_tox_count"].quantile(0.99))
+    )
+
+    print(f"  Identified {outlier_mask.sum()} extreme outliers")
+    if outlier_mask.sum() > 0:
+        print(f"  Example outliers: {list(temporal_features[outlier_mask].index[:5])}")
+
+    # We save outliers for separate analysis
+    outlier_subreddits = temporal_features[outlier_mask].copy()
+    outlier_features = features.loc[outlier_subreddits.index].copy()
+
+    print(f"\n  Top outliers by total activity:")
+    for idx, row in outlier_subreddits.nlargest(10, 'total_tox_count')[['total_tox_count', 'src_tox_count', 'tgt_tox_count', 'net_in_degree', 'net_out_degree']].iterrows():
+        print(f"    {idx}: {row['total_tox_count']:.0f} events (src={row['src_tox_count']:.0f}, tgt={row['tgt_tox_count']:.0f}, in={row['net_in_degree']:.0f}, out={row['net_out_degree']:.0f})")
+
+    # We also remove outliers from both temporal_features and features
+    temporal_features = temporal_features[~outlier_mask].copy()
+    features = features.loc[temporal_features.index].copy()
+
+    print(f"  Subreddits after outlier removal: {len(temporal_features)}")
+
+    return temporal_features, features, outlier_subreddits, outlier_features
+    
+temporal_features, features, outlier_subreddits, outlier_features = remove_extreme_outliers(temporal_features, features)
+
+# We verify no inf/nan remain
+print(f"\nData quality check before scaling:")
+print(f"  NaN values: {features.isna().sum().sum()}")
+print(f"  Inf values: {np.isinf(features.values).sum()}")
+print(f"  Max value: {features.max().max():.2f}")
+
+# ====================
+# STANDARD SCALING
+# ====================
+# We use StandardScaler (mean=0, variance=1) as it is appropriate after outlier removal.
+# This makes all features equally important for PCA
+
+def standard_scaling(features: pd.DataFrame) -> np.ndarray:
+    """
+    This function applies standard scaling to the features dataframe.
+
+    Parameters:
+    features (pd.DataFrame): Dataframe with features.
+
+    Returns:
+    X_scaled(np.ndarray): Numpy array with scaled features.
+    """
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(features)
+
+    return X_scaled
+
+X_scaled = standard_scaling(features)
+
+print(f"\nFeature summary after preprocessing:")
+print(features.describe())
+
+# ====================
+# FEATURE IMPORTANCE ANALYSIS
+# ====================
+print("\n" + "="*60)
+print("FEATURE IMPORTANCE ANALYSIS (PCA Loadings)")
+print("="*60)
+
+# We create a PCA model that keeps all components for analysis
+pca_full = PCA(n_components=min(len(feature_cols), len(X_scaled)), random_state=42)
+pca_full.fit(X_scaled)
+
+def analyze_pca_components(pca_full: PCA, feature_cols: list, variance_threshold: float = 0.80):
+    """
+    This function analyzes PCA components and determines optimal dimensionality.
+    
+    Parameters:
+    pca_full (PCA): Fitted PCA model with all components.
+    feature_cols (list): List of feature column names.
+    variance_threshold (float): Cumulative variance threshold for component selection (default: 0.90).
+    
+    Returns:
+    tuple: (n_components_optimal, feature_importance_df) where feature_importance_df shows
+           which original features contribute most to the retained PCs.
+    """
+    # We compute cumulative variance explained
+    cumvar = np.cumsum(pca_full.explained_variance_ratio_)
+    
+    # We find the number of components needed to explain variance_threshold of variance
+    n_components_optimal = np.argmax(cumvar >= variance_threshold) + 1
+    
+    print(f"\nPCA Scree Analysis:")
+    print(f"  Total components: {pca_full.n_components_}")
+    print(f"  Components for {variance_threshold*100:.0f}% variance: {n_components_optimal}")
+    print(f"  Variance explained by first {n_components_optimal} PCs: {cumvar[n_components_optimal-1]*100:.1f}%")
+    print(f"  → DIMENSIONALITY REDUCTION: Clustering will use {n_components_optimal}D PC space instead of {len(feature_cols)}D feature space")
+    
+    # We show variance for first 10 components
+    print(f"\nVariance explained by first 10 components:")
+    for i in range(min(10, pca_full.n_components_)):
+        var_pct = pca_full.explained_variance_ratio_[i] * 100
+        cumvar_pct = cumvar[i] * 100
+        bar = '█' * int(var_pct / 2)
+        highlight = ' ← RETAINED' if i < n_components_optimal else ' (discarded)'
+        print(f"  PC{i+1:2d}: {var_pct:5.1f}% (cumulative: {cumvar_pct:5.1f}%) {bar}{highlight}")
+    
+    # We analyze which original features are most important for retained PCs
+    print(f"\nOriginal Feature Contributions to Retained {n_components_optimal} PCs:")
+    print(f"  (Showing cumulative importance across all retained components)")
+    
+    # We compute total contribution of each feature across retained PCs
+    feature_importance = np.zeros(len(feature_cols))
+    for pc_idx in range(n_components_optimal):
+        # Weight by variance explained
+        weighted_loadings = np.abs(pca_full.components_[pc_idx]) * pca_full.explained_variance_ratio_[pc_idx]
+        feature_importance += weighted_loadings
+    
+    # We create a dataframe for easy interpretation
+    importance_df = pd.DataFrame({
+        'feature': feature_cols,
+        'importance': feature_importance,
+        'importance_pct': 100 * feature_importance / feature_importance.sum()
+    }).sort_values('importance', ascending=False)
+    
+    print(f"\n  Top 10 most important features for retained PCs:")
+    for idx, row in importance_df.head(10).iterrows():
+        print(f"    {row['feature']:30s}: {row['importance_pct']:5.1f}%")
+    
+    return n_components_optimal, importance_df
+
+n_components_optimal, feature_importance_df = analyze_pca_components(pca_full, feature_cols, variance_threshold=0.80)
+
+# Top features for first 3 PCs
+print(f"\nTop features for first 3 principal components:")
+for pc_idx in range(min(3, pca_full.n_components_)):
+    loadings = pca_full.components_[pc_idx]
+    variance = pca_full.explained_variance_ratio_[pc_idx] * 100
+    
+    # Get top 5 most important features
+    top_indices = np.argsort(np.abs(loadings))[-5:][::-1]
+    
+    print(f"\nPC{pc_idx+1} ({variance:.1f}% variance):")
+    for idx in top_indices:
+        feat_name = feature_cols[idx]
+        loading = loadings[idx]
+        print(f"  {feat_name:30s}: {loading:+.3f}")
+
+# ====================
+# TRANSFORM TO OPTIMAL PC SPACE FOR CLUSTERING
+# ====================
+print("\n" + "="*60)
+print(f"DYNAMIC DIMENSIONALITY REDUCTION")
+print("="*60)
+
+# We transform the scaled features to PC space with optimal dimensionality
+pca_optimal = PCA(n_components=n_components_optimal, random_state=42)
+X_pca = pca_optimal.fit_transform(X_scaled)
+
+print(f"\nTransformed data for clustering:")
+print(f"  Original feature space: {X_scaled.shape[1]}D")
+print(f"  Reduced PC space: {X_pca.shape[1]}D")
+print(f"  Variance retained: {np.sum(pca_optimal.explained_variance_ratio_)*100:.1f}%")
+print(f"  Dimensionality reduction: {(1 - X_pca.shape[1]/X_scaled.shape[1])*100:.1f}% fewer dimensions")
+print(f"\n  → Clustering will be performed in {X_pca.shape[1]}D PC space")
+print(f"  → This removes noise from {X_scaled.shape[1] - X_pca.shape[1]} dimensions contributing <{(1-0.80)*100:.0f}% variance")
+
+# ====================
+# DIMENSIONALITY REDUCTION TO 2D (for visualization only)
+# ====================
+print("\n" + "="*60)
+print(f"2D PROJECTION FOR VISUALIZATION")
+print("="*60)
+
+if umap_available:
+    # We apply UMAP to the PC space (not original features)
+    reducer = umap.UMAP(n_components=2, min_dist=0.1, n_neighbors=20, random_state=42)
+    embedding = reducer.fit_transform(X_pca)  # Project PC space to 2D
+    reducer_name = "UMAP"
+    print(f"\nUsing UMAP to project {X_pca.shape[1]}D PC space → 2D for visualization")
+else:
+    # We use first 2 PCs for visualization if UMAP unavailable
+    reducer = PCA(n_components=2, random_state=42)
+    embedding = reducer.fit_transform(X_scaled)
+    reducer_name = "PCA"
+    print(f"\nUsing first 2 PCs for 2D visualization (UMAP not available)")
+
+print(f"  Note: 2D projection is for visualization only, clustering uses {X_pca.shape[1]}D PC space")
+
+# ====================
+# CLUSTER IN OPTIMAL PC SPACE
+# ====================
+# CRITICAL: We cluster on PC space (not original features, not 2D projection)
+
+print("\n" + "="*60)
+print("CLUSTERING ALGORITHM COMPARISON")
+print("="*60)
+print(f"All clustering performed in {X_pca.shape[1]}D PC space (not original {X_scaled.shape[1]}D features)\n")
+
+# ====================
+# KMEANS EVALUATION - Find best k
+# ====================
+print("\nEvaluating KMeans with multiple k values...")
+kmeans_results = []
+
+for k in [2, 3, 4, 5, 7, 10, 12, 15]:
+    km = KMeans(n_clusters=k, n_init=20, random_state=42)
+    labels = km.fit_predict(X_pca)  # Cluster on PC space
+    
+    # Compute metrics
+    silhouette = silhouette_score(X_pca, labels) if len(set(labels)) > 1 else -1
+    
+    # Check cluster balance
+    unique, counts = np.unique(labels, return_counts=True)
+    max_size = counts.max()
+    min_size = counts.min()
+    balance_ratio = min_size / max_size
+    
+    kmeans_results.append({
+        'k': k,
+        'silhouette': silhouette,
+        'balance_ratio': balance_ratio,
+        'min_size': min_size,
+        'max_size': max_size,
+        'labels': labels
+    })
+    
+    print(f"  k={k}: silhouette={silhouette:.3f}, balance={balance_ratio:.3f}, "
+          f"sizes=[{min_size}–{max_size}]")
+
+# Select best k based on balance AND silhouette
+# Prefer balanced clusters (ratio > 0.1) over perfect silhouette
+print("\nSelecting best KMeans configuration...")
+# Prioritize balance: require smallest cluster to be at least 5% of largest
+valid_results = [r for r in kmeans_results if r['balance_ratio'] > 0.05 and r['min_size'] >= 0.05 * len(features)]
+
+if valid_results:
+    # Among balanced options, pick highest silhouette
+    best_kmeans = max(valid_results, key=lambda x: x['silhouette'])
+else:
+    # Relaxed threshold: at least 2% of data in smallest cluster
+    relaxed_results = [r for r in kmeans_results if r['min_size'] >= 0.02 * len(features)]
+    if relaxed_results:
+        best_kmeans = max(relaxed_results, key=lambda x: x['silhouette'])
+    else:
+        # Last resort: pick best balance
+        best_kmeans = max(kmeans_results, key=lambda x: x['balance_ratio'])
+
+best_k = best_kmeans['k']
+print(f"  Selected: k={best_k} (silhouette={best_kmeans['silhouette']:.3f}, "
+      f"balance={best_kmeans['balance_ratio']:.3f})")
+
+# ====================
+# UMAP-BASED CLUSTERING (COMPARISON - EXPERIMENTAL)
+# ====================
+if umap_available:
+    print(f"\nTrying UMAP 2D-based clustering with k={best_k} (for comparison)...")
+    km_umap = KMeans(n_clusters=best_k, n_init=20, random_state=42)
+    labels_umap = km_umap.fit_predict(embedding)  # Cluster on 2D UMAP embedding
+    silhouette_umap_clustering = silhouette_score(embedding, labels_umap)
+    
+    # Check cluster balance
+    unique_umap, counts_umap = np.unique(labels_umap, return_counts=True)
+    balance_umap = counts_umap.min() / counts_umap.max()
+    
+    print(f"  UMAP 2D k={best_k}: silhouette={silhouette_umap_clustering:.3f}, balance={balance_umap:.3f}, sizes=[{counts_umap.min()}–{counts_umap.max()}]")
+    print(f"  Note: 2D UMAP clustering is experimental; {X_pca.shape[1]}D PC clustering preferred for interpretability")
+else:
+    labels_umap = None
+    silhouette_umap_clustering = None
+
+if hdbscan_available:
+    print("\nTrying HDBSCAN (density-based) on PC space...")
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=50,  # Increased from 8 to avoid tiny clusters
+        min_samples=10,       # Increased for more conservative clustering
+        metric="euclidean",
+        cluster_selection_epsilon=0.5
+    )
+    cluster_labels_hdbscan = clusterer.fit_predict(X_pca)  # Use PC space
+    n_clusters_hdbscan = len(set(cluster_labels_hdbscan)) - (1 if -1 in cluster_labels_hdbscan else 0)
+    n_noise = list(cluster_labels_hdbscan).count(-1)
+    
+    print(f"  HDBSCAN found: {n_clusters_hdbscan} clusters, {n_noise} noise points")
+    
+    # Check cluster balance
+    unique, counts = np.unique(cluster_labels_hdbscan[cluster_labels_hdbscan != -1], return_counts=True)
+    if len(unique) > 0:
+        max_size = counts.max()
+        min_size = counts.min()
+        balance_ratio = min_size / max_size if max_size > 0 else 0
+        print(f"  Cluster balance: min={min_size}, max={max_size}, ratio={balance_ratio:.2f}")
+    
+    cluster_labels_hdbscan_final = cluster_labels_hdbscan
+    cluster_method_hdbscan = f"HDBSCAN (k={n_clusters_hdbscan}, noise={n_noise})"
+else:
+    cluster_labels_hdbscan_final = None
+    cluster_method_hdbscan = None
+    n_clusters_hdbscan = 0
+
+# Use KMeans if HDBSCAN not available or produced poor results
+if cluster_labels_hdbscan_final is None or n_clusters_hdbscan < 3:
+    cluster_labels = best_kmeans['labels']
+    cluster_method = f"KMeans (k={best_kmeans['k']}, silhouette={best_kmeans['silhouette']:.3f})"
+    best_k = best_kmeans['k']
+    print(f"\nUsing KMeans clustering on {X_pca.shape[1]}D PC space")
+else:
+    cluster_labels = cluster_labels_hdbscan_final
+    cluster_method = cluster_method_hdbscan
+    best_k = n_clusters_hdbscan
+    print(f"\nUsing HDBSCAN clustering on {X_pca.shape[1]}D PC space")
+
+# ====================
+# CLUSTER STABILITY VALIDATION (bootstrap)
+# ====================
+print("\n" + "="*60)
+print("CLUSTER STABILITY VALIDATION (Bootstrap)")
+print("="*60)
+
+# We use 100 bootstrap samples for reliable stability estimates (increased from 10)
+n_bootstrap = 100
+ari_scores = []
+for i in range(n_bootstrap):
+    # Sample 80% of data
+    sample_idx = np.random.choice(len(X_pca), size=int(0.8 * len(X_pca)), replace=False)
+    X_sample = X_pca[sample_idx]  # Use PC space
+    
+    if hdbscan_available and 'cluster_labels_hdbscan_final' in locals() and cluster_labels_hdbscan_final is not None:
+        clusterer_boot = hdbscan.HDBSCAN(min_cluster_size=50, min_samples=10, metric="euclidean")
+        labels_boot = clusterer_boot.fit_predict(X_sample)
+    else:
+        km_boot = KMeans(n_clusters=best_k, n_init=20, random_state=i)
+        labels_boot = km_boot.fit_predict(X_sample)
+    
+    # Compute ARI between bootstrap sample and full clustering
+    ari = adjusted_rand_score(cluster_labels[sample_idx], labels_boot)
+    ari_scores.append(ari)
+
+# We compute bootstrap statistics with confidence intervals
+ari_mean = np.mean(ari_scores)
+ari_std = np.std(ari_scores)
+ari_ci_lower = np.percentile(ari_scores, 2.5)
+ari_ci_upper = np.percentile(ari_scores, 97.5)
+
+print(f"Bootstrap ARI (mean ± std): {ari_mean:.3f} ± {ari_std:.3f}")
+print(f"  95% Confidence Interval: [{ari_ci_lower:.3f}, {ari_ci_upper:.3f}]")
+print(f"  Higher ARI (close to 1.0) = more stable clusters")
+print(f"  Interpretation: {'STABLE' if ari_mean > 0.7 else 'MODERATE' if ari_mean > 0.5 else 'UNSTABLE'}")
+
+# ====================
+# COMPREHENSIVE CLUSTER VALIDATION
+# ====================
+print("\n" + "="*60)
+print("COMPREHENSIVE CLUSTER VALIDATION")
+print("="*60)
+
+def validate_clusters_statistical(X_pca: np.ndarray, features: pd.DataFrame, cluster_labels: np.ndarray, feature_cols: list):
+    """
+    This function performs comprehensive statistical validation of clusters.
+    
+    Parameters:
+    X_pca (np.ndarray): PC-transformed feature matrix (reduced dimensionality).
+    features (pd.DataFrame): Original features dataframe.
+    cluster_labels (np.ndarray): Cluster assignments.
+    feature_cols (list): List of feature column names.
+    
+    Returns:
+    dict: Dictionary containing validation metrics and test results.
+    """
+    from sklearn.metrics import davies_bouldin_score, calinski_harabasz_score
+    from scipy.stats import f_oneway, kruskal
+    
+    results = {}
+    
+    # We compute additional clustering quality metrics on PC space
+    results['davies_bouldin'] = davies_bouldin_score(X_pca, cluster_labels)
+    results['calinski_harabasz'] = calinski_harabasz_score(X_pca, cluster_labels)
+    
+    print("\nClustering Quality Metrics:")
+    print(f"  Davies-Bouldin Index: {results['davies_bouldin']:.3f} (lower is better, < 1.0 is good)")
+    print(f"  Calinski-Harabasz Score: {results['calinski_harabasz']:.1f} (higher is better)")
+    
+    # We perform statistical tests for each feature across clusters
+    print("\nStatistical Tests for Feature Discrimination Across Clusters:")
+    print("  (Testing if clusters differ significantly on each feature)")
+    
+    significant_features = []
+    feature_test_results = []
+    
+    for i, col in enumerate(feature_cols):
+        # We group feature values by cluster
+        groups = [features.iloc[:, i][cluster_labels == label].values 
+                 for label in np.unique(cluster_labels) if label != -1]
+        
+        # We skip if any group is too small
+        if any(len(g) < 3 for g in groups):
+            continue
+        
+        # We perform Kruskal-Wallis test (non-parametric, robust to non-normality)
+        h_stat, p_value = kruskal(*groups)
+        
+        # We compute effect size (eta-squared approximation for Kruskal-Wallis)
+        n_total = sum(len(g) for g in groups)
+        eta_squared = (h_stat - len(groups) + 1) / (n_total - len(groups))
+        
+        feature_test_results.append({
+            'feature': col,
+            'h_statistic': h_stat,
+            'p_value': p_value,
+            'eta_squared': eta_squared,
+            'significant': p_value < 0.01  # Bonferroni-adjusted threshold
+        })
+        
+        if p_value < 0.01:  # We use strict threshold due to multiple comparisons
+            significant_features.append(col)
+    
+    # We sort by effect size and show top discriminative features
+    feature_test_results.sort(key=lambda x: x['eta_squared'], reverse=True)
+    
+    print(f"\nTop 10 most discriminative features (by effect size):")
+    for i, result in enumerate(feature_test_results[:10]):
+        sig_marker = "***" if result['p_value'] < 0.001 else "**" if result['p_value'] < 0.01 else "*" if result['p_value'] < 0.05 else ""
+        print(f"  {i+1:2d}. {result['feature']:30s}: η²={result['eta_squared']:.3f}, p={result['p_value']:.2e} {sig_marker}")
+    
+    results['feature_tests'] = feature_test_results
+    results['n_significant_features'] = len(significant_features)
+    
+    print(f"\nSignificant features (p < 0.01): {len(significant_features)}/{len(feature_cols)}")
+    if len(significant_features) < len(feature_cols) * 0.5:
+        print(f"  ⚠️ WARNING: Less than 50% of features significantly discriminate clusters")
+        print(f"    This suggests clusters may not be well-separated or features may be redundant")
+    
+    return results
+
+validation_results = validate_clusters_statistical(X_pca, features, cluster_labels, feature_cols)
+
+# ====================
+# SILHOUETTE COMPARISON (PC space vs 2D projection vs original space)
+# ====================
+silhouette_pca = silhouette_score(X_pca, cluster_labels) if len(set(cluster_labels)) > 1 else -1
+silhouette_original = silhouette_score(X_scaled, cluster_labels) if len(set(cluster_labels)) > 1 else -1
+silhouette_embedding = silhouette_score(embedding, cluster_labels) if len(set(cluster_labels)) > 1 else -1
+
+print(f"\nSilhouette Score Comparison:")
+print(f"  {X_pca.shape[1]}D PC space (USED FOR CLUSTERING): {silhouette_pca:.3f}")
+print(f"  Original {len(feature_cols)}D feature space: {silhouette_original:.3f}")
+print(f"  {reducer_name} 2D projection: {silhouette_embedding:.3f}")
+if umap_available and silhouette_umap_clustering is not None:
+    print(f"  UMAP 2D clustering (experimental): {silhouette_umap_clustering:.3f}")
+print(f"\n  → PC space ({X_pca.shape[1]}D) vs Original space ({len(feature_cols)}D): {'BETTER' if silhouette_pca > silhouette_original else 'WORSE'}")
+print(f"    Improvement: {(silhouette_pca - silhouette_original):.3f} ({((silhouette_pca - silhouette_original)/abs(silhouette_original)*100):.1f}%)")
+if umap_available and silhouette_umap_clustering is not None:
+    print(f"  → UMAP 2D clustering gives {'BETTER' if silhouette_umap_clustering > silhouette_pca else 'WORSE'} separation but less interpretable")
+
+# WARNING for suspiciously high scores
+if silhouette_original > 0.9:
+    print(f"\n⚠️  WARNING: Silhouette > 0.9 suggests outlier-driven clustering")
+    print(f"    This often means a few extreme points are being separated,")
+    print(f"    not meaningful pattern discovery in the main data.")
+
+# ====================
+# RESULTS ASSEMBLY
+# ====================
+result_df = features.copy()
+result_df["cluster"] = cluster_labels
+result_df["embed_x"] = embedding[:, 0]
+result_df["embed_y"] = embedding[:, 1]
+
+# Add back original (non-transformed) features for interpretation
+raw_feature_cols = [
+    "src_tox_count", "src_active_span_days", "src_median_gap_days", "src_gap_std", 
+    "src_max_30d_count", "src_days_since_last",
+    "tgt_tox_count", "tgt_active_span_days", "tgt_median_gap_days", "tgt_gap_std", 
+    "tgt_max_30d_count", "tgt_days_since_last",
+    "net_in_degree", "net_out_degree", "net_toxicity", "total_tox_count"
+]
+for col in raw_feature_cols:
+    if col in temporal_features.columns:
+        result_df[f"{col}_raw"] = temporal_features[col]
+
+print(f"\n" + "="*60)
+print(f"Reducer: {reducer_name} | Clustering: {cluster_method}")
+print(f"Clustering Space: {X_pca.shape[1]}D PC space (from {len(feature_cols)} original features)")
+print("="*60)
+print("\nCluster sizes:")
+cluster_size_df = result_df.groupby("cluster").size().rename("n_subreddits").sort_values(ascending=False)
+print(cluster_size_df)
+
+# Check for imbalance
+if len(cluster_size_df) > 1:
+    max_cluster_size = cluster_size_df.max()
+    min_cluster_size = cluster_size_df.min()
+    imbalance_ratio = max_cluster_size / min_cluster_size
+    
+    print(f"\nCluster Balance Analysis:")
+    print(f"  Largest cluster: {max_cluster_size} ({max_cluster_size/len(result_df)*100:.1f}%)")
+    print(f"  Smallest cluster: {min_cluster_size} ({min_cluster_size/len(result_df)*100:.1f}%)")
+    print(f"  Imbalance ratio: {imbalance_ratio:.1f}x")
+    
+    if max_cluster_size / len(result_df) > 0.9:
+        print(f"\n⚠️  WARNING: One cluster contains >80% of data!")
+        print(f"    This suggests poor segmentation. Consider:")
+        print(f"    - Using different k values")
+        print(f"    - Adding more discriminative features")
+        print(f"    - Checking if data is naturally homogeneous")
+
+# Cluster interpretation
+print("\n" + "="*60)
+print("CLUSTER CHARACTERISTICS (median values)")
+print("="*60)
+interpretation_cols = [
+    "total_tox_count_raw",
+    "src_tox_count_raw", 
+    "tgt_tox_count_raw",
+    "net_toxicity_raw",
+    "net_in_degree_raw",
+    "net_out_degree_raw",
+    "src_recent_acceleration",
+    "tgt_recent_acceleration"
+]
+# Filter to only existing columns
+interpretation_cols = [col for col in interpretation_cols if col in result_df.columns]
+cluster_summary = result_df.groupby("cluster")[interpretation_cols].median()
+print(cluster_summary)
+
+# ====================
+# TEMPORAL TOXICITY PATTERN CLASSIFICATION
+# ====================
+print("\n" + "="*60)
+print("TEMPORAL TOXICITY PATTERN CLASSIFICATION")
+print("="*60)
+
+def classify_temporal_patterns(result_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function classifies subreddits into temporal toxicity patterns: chronic, bursty, or occasional.
+    
+    Parameters:
+    result_df (pd.DataFrame): Dataframe with cluster assignments and raw features.
+    
+    Returns:
+    pd.DataFrame: Result dataframe with added temporal_pattern column.
+    """
+    # We define temporal patterns using data-driven thresholds (tertile splits)
+    # Chronic: high count + low gap std (consistent, sustained toxicity)
+    # Bursty: high max_30d + high gap std (intense bursts with long gaps)
+    # Occasional: low count + high median gap (infrequent toxicity)
+    
+    patterns = []
+    
+    for idx, row in result_df.iterrows():
+        src_count = row.get('src_tox_count_raw', 0)
+        src_gap_std = row.get('src_gap_std', 0)  # Note: this is log-transformed in features
+        src_max_30d = row.get('src_max_30d_count_raw', 0)
+        src_median_gap = row.get('src_median_gap_days_raw', 0)
+        
+        # We use tertile-based classification
+        count_high = src_count > result_df['src_tox_count_raw'].quantile(0.67)
+        count_low = src_count < result_df['src_tox_count_raw'].quantile(0.33)
+        
+        # For gap std: low std = consistent, high std = variable
+        gap_std_low = src_gap_std < result_df['src_gap_std'].quantile(0.33)
+        gap_std_high = src_gap_std > result_df['src_gap_std'].quantile(0.67)
+        
+        # For max 30d: high concentration in short window
+        burst_high = src_max_30d > result_df['src_max_30d_count_raw'].quantile(0.67)
+        
+        # We classify based on pattern signatures
+        if count_high and gap_std_low:
+            pattern = "Chronic"
+        elif burst_high and gap_std_high:
+            pattern = "Bursty"
+        elif count_low:
+            pattern = "Occasional"
+        else:
+            pattern = "Mixed"
+        
+        patterns.append(pattern)
+    
+    result_df['temporal_pattern'] = patterns
+    
+    # We report pattern distribution
+    print("\nTemporal Pattern Distribution:")
+    pattern_counts = result_df['temporal_pattern'].value_counts()
+    for pattern, count in pattern_counts.items():
+        pct = count / len(result_df) * 100
+        print(f"  {pattern:12s}: {count:4d} ({pct:5.1f}%)")
+    
+    return result_df
+
+result_df = classify_temporal_patterns(result_df)
+
+# We analyze temporal patterns by cluster
+print("\nTemporal Pattern Distribution by Cluster:")
+pattern_by_cluster = pd.crosstab(result_df['cluster'], result_df['temporal_pattern'], normalize='index') * 100
+print(pattern_by_cluster.round(1))
+
+# Add cluster interpretation labels with activity levels and temporal patterns
+print("\n" + "="*60)
+print("CLUSTER ROLE INTERPRETATION (Activity + Role + Temporal Pattern)")
+print("="*60)
+for cluster_id in cluster_summary.index:
+    cluster_data = cluster_summary.loc[cluster_id]
+    src_count = cluster_data.get("src_tox_count_raw", 0)
+    tgt_count = cluster_data.get("tgt_tox_count_raw", 0)
+    total_count = cluster_data.get("total_tox_count_raw", 0)
+    net_tox = cluster_data.get("net_toxicity_raw", 0)
+    in_deg = cluster_data.get("net_in_degree_raw", 0)
+    out_deg = cluster_data.get("net_out_degree_raw", 0)
+    
+    # We get dominant temporal pattern for this cluster
+    cluster_patterns = result_df[result_df['cluster'] == cluster_id]['temporal_pattern'].value_counts()
+    dominant_pattern = cluster_patterns.index[0] if len(cluster_patterns) > 0 else "Unknown"
+    pattern_pct = cluster_patterns.iloc[0] / cluster_patterns.sum() * 100 if len(cluster_patterns) > 0 else 0
+    
+    # Classify activity level
+    if total_count > 100:
+        activity = "High-volume"
+    elif total_count > 30:
+        activity = "Moderate-volume"
+    else:
+        activity = "Low-volume"
+    
+    # Classify role
+    if abs(src_count - tgt_count) < 5 and src_count > 0 and tgt_count > 0:
+        role = "Balanced (Hub)"
+    elif src_count > tgt_count * 1.5:
+        role = "Aggressor"
+    elif tgt_count > src_count * 1.5:
+        role = "Victim"
+    elif src_count > tgt_count:
+        role = "Aggressor-leaning"
+    elif tgt_count > src_count:
+        role = "Victim-leaning"
+    else:
+        role = "Inactive"
+    
+    label = f"{activity} {role} - {dominant_pattern}"
+    print(f"Cluster {cluster_id}: {label}")
+    print(f"  Median: {total_count:.0f} events (src={src_count:.0f}, tgt={tgt_count:.0f}), net={net_tox:.0f}, in_deg={in_deg:.0f}, out_deg={out_deg:.0f}")
+    print(f"  Dominant pattern: {dominant_pattern} ({pattern_pct:.0f}% of cluster)")
+
+# ====================
+# VISUALIZATION
+# ====================
+plt.figure(figsize=(12, 5))
+
+# Plot 1: Embedding colored by cluster
+plt.subplot(1, 2, 1)
+palette = sns.color_palette("husl", n_colors=len(set(cluster_labels))) if cluster_labels is not None else None
+sns.scatterplot(
+    x="embed_x", y="embed_y", hue="cluster", data=result_df,
+    palette=palette, s=50, alpha=0.85, edgecolor="white", linewidth=0.6
+)
+plt.title(f"Subreddit temporal toxicity dynamics\n({reducer_name} projection, clustered in {len(feature_cols)}D)")
+plt.xlabel(f"{reducer_name} 1")
+plt.ylabel(f"{reducer_name} 2")
+plt.legend(title="cluster", bbox_to_anchor=(1.05, 1), loc="upper left")
+plt.grid(alpha=0.2)
+
+# Plot 2: Feature importance (PCA variance)
+plt.subplot(1, 2, 2)
+pca_full = PCA(n_components=min(len(feature_cols), len(X_scaled)), random_state=42)
+pca_full.fit(X_scaled)
+explained_var = pca_full.explained_variance_ratio_ * 100
+num_pcs = len(explained_var)
+bar_positions = np.arange(1, num_pcs + 1)
+bars = plt.bar(bar_positions, explained_var)
+plt.xlabel("Principal Component")
+plt.ylabel("Variance Explained (%)")
+plt.title(f"PCA Variance Explained\n(Total: {pca_full.explained_variance_ratio_.sum()*100:.1f}%)")
+plt.grid(alpha=0.2, axis='y')
+
+
+# Print variance explained by each PC and its top feature in the output cell only
+print("\nVariance explained by each principal component and its top feature:")
+print(f"(First {n_components_optimal} PCs were retained for clustering, explaining {np.sum(pca_full.explained_variance_ratio_[:n_components_optimal])*100:.1f}% variance)")
+for i, (var, comp) in enumerate(zip(explained_var, pca_full.components_)):
+    top_idx = np.argmax(np.abs(comp))
+    top_feature = feature_cols[top_idx]
+    retained_marker = " ← RETAINED" if i < n_components_optimal else " (discarded)"
+    print(f"PC{i+1}: {var:.2f}% variance, top feature: {top_feature}{retained_marker}")
+
+plt.tight_layout()
+plt.show()
+
+# ====================
+# OUTLIER ANALYSIS (MEGA-SUBREDDITS)
+# ====================
+if 'outlier_subreddits' in locals() and len(outlier_subreddits) > 0:
+    print("\n" + "="*60)
+    print(f"OUTLIER ANALYSIS: {len(outlier_subreddits)} MEGA-SUBREDDITS")
+    print("="*60)
+    
+    outlier_summary = outlier_subreddits[['total_tox_count', 'src_tox_count', 'tgt_tox_count', 
+                                           'net_toxicity', 'net_in_degree', 'net_out_degree']].copy()
+    outlier_summary['role'] = outlier_summary.apply(
+        lambda row: 'Mega-Aggressor' if row['src_tox_count'] > row['tgt_tox_count'] * 1.5
+        else 'Mega-Victim' if row['tgt_tox_count'] > row['src_tox_count'] * 1.5
+        else 'Mega-Hub', axis=1
+    )
+    
+    print("\nTop 15 Mega-Subreddits:")
+    print(outlier_summary.nlargest(15, 'total_tox_count')[['total_tox_count', 'src_tox_count', 'tgt_tox_count', 'net_toxicity', 'role']])
+    
+    print("\nOutlier Role Distribution:")
+    print(outlier_summary['role'].value_counts())
+    
+    print("\nOutlier Summary Statistics:")
+    print(outlier_summary[['total_tox_count', 'src_tox_count', 'tgt_tox_count', 'net_in_degree', 'net_out_degree']].describe())
+
+result_df.head()

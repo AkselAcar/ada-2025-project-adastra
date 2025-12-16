@@ -1,141 +1,303 @@
-# IMPROVED Temporal toxicity clustering: role-agnostic, per-subreddit dynamics
-# Implements critical recommendations from analysis
-# 
-# TO USE: Copy this code into the notebook cell after "### TEST" markdown
-
-import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.preprocessing import RobustScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, adjusted_rand_score
 from scipy import stats
 
-try:
-    import umap
-    umap_available = True
-except Exception:
-    umap_available = False
 
-try:
-    import hdbscan
-    hdbscan_available = True
-except Exception:
-    hdbscan_available = False
+def preliminary_control(df: pd.DataFrame) -> pd.DataFrame: 
+    """
+    This function ensures that the dataframe has the necessary toxicity score column.
 
-# Ensure toxicity score exists
-if "TOXICITY_SCORE" not in interactions_df.columns:
-    interactions_df = compute_toxicity_score(interactions_df)
+    Parameters:
+    df (pd.DataFrame): Input dataframe with interactions data.
 
-# Ensure binary toxicity label exists
-if "TOXICITY_CAT" not in interactions_df.columns:
-    if "TOXICITY_THRESHOLD" in globals():
-        toxicity_threshold = TOXICITY_THRESHOLD
-    else:
-        toxicity_threshold = interactions_df["TOXICITY_SCORE"].quantile(0.75)
-    interactions_df["TOXICITY_CAT"] = (interactions_df["TOXICITY_SCORE"] >= toxicity_threshold).astype(int)
-
-
-# ====================
-# IMPROVED FEATURE ENGINEERING
-# ====================
-
-# Helper: median gap in days between consecutive timestamps
-def median_gap_days(ts: pd.Series) -> float:
-    ts_sorted = ts.sort_values()
-    if ts_sorted.shape[0] < 2:
-        return np.nan
-    deltas = ts_sorted.diff().dropna().dt.total_seconds() / 86400
-    return deltas.median()
-
-
-# Helper: std of gaps (VOLATILITY measure - NEW)
-def gap_std(ts: pd.Series) -> float:
-    ts_sorted = ts.sort_values()
-    if ts_sorted.shape[0] < 2:
-        return np.nan
-    deltas = ts_sorted.diff().dropna().dt.total_seconds() / 86400
-    return deltas.std()
-
-
-# Helper: toxicity trend (linear regression slope over time - NEW)
-def toxicity_trend(ts: pd.Series) -> float:
-    """Returns slope of toxic event count over time (events/day)"""
-    ts_sorted = ts.sort_values()
-    if ts_sorted.shape[0] < 3:
-        return 0.0
-    
-    # Convert to days since first event
-    days = (ts_sorted - ts_sorted.min()).dt.total_seconds() / 86400
-    counts = np.arange(1, len(ts_sorted) + 1)  # cumulative count
-    
+    Returns:
+    pd.DataFrame: Dataframe with ensured toxicity score column.
+    """
     try:
-        slope, _, _, _, _ = stats.linregress(days.values, counts)
-        return slope
-    except:
-        return 0.0
+        import umap
+        umap_available = True
+    except Exception:
+        umap_available = False
+
+    try:
+        import hdbscan
+        hdbscan_available = True
+    except Exception:
+        hdbscan_available = False
+
+    # We check if TOXICITY_SCORE column exists, if not we create it
+    if "TOXICITY_SCORE" not in df.columns:
+        df = compute_toxicity_score(df)
+
+    # We check if TOXICITY_CAT column exists, if not we create it
+    if "TOXICITY_CAT" not in df.columns:
+        # We check if a global threshold variable exists, if not we use the 75th percentile of the TOXICITY_SCORE
+        if "TOXICITY_THRESHOLD" in globals():
+            toxicity_threshold = TOXICITY_THRESHOLD
+        else:
+            toxicity_threshold = df["TOXICITY_SCORE"].quantile(0.75)
+        df["TOXICITY_CAT"] = (df["TOXICITY_SCORE"] >= toxicity_threshold).astype(int)
+
+    return df, umap_available, hdbscan_available
 
 
-# Helper: recency score (days since last toxic event - NEW)
-def days_since_last(ts: pd.Series, reference_date: pd.Timestamp) -> float:
-    """Days from last toxic event to reference date"""
-    if ts.empty:
+preliminary_control(interactions_df)
+
+# ====================
+# FEATURE ENGINEERING
+# ====================
+
+def median_gap_days(ts: pd.Series) -> float:
+    """
+    This function calculates the median gap in days between consecutive timestamps in a pandas Series.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+
+    Returns:
+    float: The median gap in days between consecutive timestamps. Returns np.nan if not computable.
+    """
+    # We ensure datetime type, drop missing values and sort in ascending order.
+    ts_sorted = pd.to_datetime(ts, errors='coerce').dropna().sort_values()
+    # If we have less than 2 timestamps, we cannot compute gaps, so we return np.nan
+    if len(ts_sorted) < 2:
         return np.nan
-    return (reference_date - ts.max()).total_seconds() / 86400
+    # Remove duplicate timestamps (if multiple identical events, we should not generate a gap of 0)
+    ts_sorted = ts_sorted.drop_duplicates()
+    if len(ts_sorted) < 2:
+        return np.nan
+    # We compute the difference between each timestamp and the previous one (in seconds) and then convert it to days
+    deltas = ts_sorted.diff().dt.total_seconds() / 86400.0
+    return float(deltas.dropna().median())
 
 
-# Helper: maximum number of toxic events in any rolling window
+def gap_std(ts: pd.Series) -> float:
+    """
+    This function calculates the standard deviation of gaps in days between consecutive timestamps in a pandas Series.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+
+    Returns:
+    float: The standard deviation of gaps in days between consecutive timestamps. Returns np.nan if not
+    """
+    # We ensure datetime type, drop missing values, sort in ascending order and remove duplicates.
+    ts_sorted = pd.to_datetime(ts, errors='coerce').dropna().sort_values().drop_duplicates()
+    # If we have less than 2 timestamps, we cannot compute gaps, so we return np.nan
+    if len(ts_sorted) < 2:
+        return np.nan
+    # We compute the difference between each timestamp and the previous one (in seconds) and then convert it to days
+    deltas_days = ts_sorted.diff().dt.total_seconds() / 86400
+    return float(deltas_days.dropna().std(ddof=0))  # With ddof=0, the std of a single value is 0.0 (which is reasonable: no variation if only one gap)
+    
+
+def toxicity_trend(ts: pd.Series) -> float:
+    """
+    This function returns the slope of toxic event count over time (events/day) using regression.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+
+    Returns:
+    float: The slope of toxic event count over time. Returns np.nan if not computable
+    """
+    # We ensure datetime type, drop missing values, sort in ascending order and remove duplicates.
+    ts_sorted = pd.to_datetime(ts, errors='coerce').dropna().sort_values().drop_duplicates()
+    # If we have less than 3 timestamps, we cannot compute a trend, so we return np.nan
+    if len(ts_sorted) < 3:
+        return np.nan
+
+    # We convert to days since first event happened
+    days = (ts_sorted - ts_sorted.min()).dt.total_seconds() / 86400.0
+    # Cumulative count
+    counts = np.arange(1, len(ts_sorted) + 1)  
+    
+    # We check if all days are the same (should not happen due to previous checks, but just in case)
+    # If all days are the same, we cannot compute a slope 
+    if np.allclose(days.values, days.values[0]):
+        return np.nan
+
+    try:
+        # We use Theil-Sen estimator for robustness to compute the slope as Theil-Sen is 
+        # more robust to outliers and non-normal data than simple linear regression
+        slope, _, _, _ = stats.theilslopes(counts, days.values, 0.95)
+        return float(slope)
+    except Exception:
+        # We fallback to linear regression if Theil-Sen fails
+        try:
+            slope, _, _, _, _ = stats.linregress(days.values, counts)
+            return float(slope)
+        except Exception:
+            return np.nan
+
+
+def days_since_last(ts: pd.Series, reference_date: pd.Timestamp) -> float:
+    """
+    This function calculates the number of days since the last timestamp in the series relative to a reference date.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+    reference_date (pd.Timestamp): The reference date to calculate recency from.
+
+    Returns:
+    float: The number of days since the last timestamp. Returns np.nan if not computable
+    """
+    # We ensure datetime type and drop missing values.
+    ts_filtered = pd.to_datetime(ts, errors="coerce").dropna()
+    # If the series is empty or reference_date is NaT, return np.nan
+    if ts_filtered.empty or pd.isna(reference_date):
+        return np.nan
+    last = ts_filtered.max()
+    delta = reference_date - last
+    return float(delta.total_seconds() / 86400.0) # Convert time delta to days
+
+
+# def max_events_in_window(ts: pd.Series, window_days: int = 30) -> int:
+#     ts_sorted = ts.sort_values().reset_index(drop=True)
+#     if ts_sorted.empty:
+#         return 0
+#     window = pd.Timedelta(days=window_days)
+#     left = 0
+#     max_count = 1
+#     for right in range(len(ts_sorted)):
+#         while ts_sorted[right] - ts_sorted[left] > window:
+#             left += 1
+#         max_count = max(max_count, right - left + 1)
+#     return max_count
+
+
 def max_events_in_window(ts: pd.Series, window_days: int = 30) -> int:
-    ts_sorted = ts.sort_values().reset_index(drop=True)
+    """
+    This function returns the maximum number of events (equivalent to timestamps) contained in any sliding window of window_days.
+    
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+    window_days (int): The size of the sliding window in days.
+
+    Returns:
+    int: The maximum number of events in any sliding window of the specified size.
+    """
+    if window_days <= 0:
+        raise ValueError("window_days must be positive")
+
+    # We ensure datetime type, drop missing values and sort in ascending order.
+    ts_sorted = pd.to_datetime(ts, errors="coerce", utc=True).dropna().sort_values().reset_index(drop=True)
     if ts_sorted.empty:
         return 0
-    window = pd.Timedelta(days=window_days)
+
+    # We use a two-pointer technique to find the maximum number of events in any window
+    window = pd.Timedelta(days=int(window_days))
     left = 0
-    max_count = 1
+    max_count = 0
+
+    # Two-pointer sliding window approach
     for right in range(len(ts_sorted)):
-        while ts_sorted[right] - ts_sorted[left] > window:
+        # Move the right pointer forward one event at a time (expanding the window)
+        # For each new right, check if the window [left, right] is within the allowed window size
+        # If the time difference between the rightmost and leftmost timestamps exceeds the window,
+        # move the left pointer forward to shrink the window until it fits
+        while left <= right and (ts_sorted.iloc[right] - ts_sorted.iloc[left]) > window:
+            # The window is too large, so increment left to shrink it
             left += 1
-        max_count = max(max_count, right - left + 1)
-    return max_count
+        # After adjusting, the window [left, right] now fits within window_days
+        curr = right - left + 1  # Number of events in the current window
+        # Update max_count if this window contains more events than any previous window
+        if curr > max_count:
+            max_count = curr
+
+    return int(max_count)
 
 
-# Helper: acceleration (recent vs previous activity - NEW)
-def recent_acceleration(ts: pd.Series, recent_days: int = 90) -> float:
-    """Ratio of recent activity rate to historical rate"""
-    ts_sorted = ts.sort_values()
-    if ts_sorted.shape[0] < 4:
-        return 1.0
+# def recent_acceleration(ts: pd.Series, recent_days: int = 90) -> float:
+#     """Ratio of recent activity rate to historical rate"""
+#     ts_sorted = ts.sort_values()
+#     if ts_sorted.shape[0] < 4:
+#         return 1.0
     
-    cutoff = ts_sorted.max() - pd.Timedelta(days=recent_days)
-    recent_count = (ts_sorted >= cutoff).sum()
-    historical_count = (ts_sorted < cutoff).sum()
+#     cutoff = ts_sorted.max() - pd.Timedelta(days=recent_days)
+#     recent_count = (ts_sorted >= cutoff).sum()
+#     historical_count = (ts_sorted < cutoff).sum()
     
-    # Avoid division by zero - return high value instead of inf
+#     # Avoid division by zero - return high value instead of inf
+#     if historical_count == 0:
+#         return 10.0 if recent_count > 0 else 1.0
+    
+#     # Rate = count / days
+#     total_days = (ts_sorted.max() - ts_sorted.min()).total_seconds() / 86400
+#     if total_days == 0 or total_days <= recent_days:
+#         return 1.0
+    
+#     recent_rate = recent_count / recent_days
+#     historical_rate = historical_count / (total_days - recent_days)
+    
+#     # Cap the ratio to avoid extreme values
+#     if historical_rate > 0:
+#         ratio = recent_rate / historical_rate
+#         return min(ratio, 10.0)  # Cap at 10x acceleration
+#     else:
+#         return 10.0
+
+
+def recent_acceleration(ts: pd.Series, recent_days: int = 90, cap: float = 10.0) -> float:
+    """
+    This function calculates the ratio of recent event rate to historical event rate.
+
+    Parameters:
+    ts (pd.Series): A pandas Series expected to contain datetime objects.
+    recent_days (int): The number of days to consider as the recent period.
+
+    Returns:
+    float: The ratio of recent event rate to historical event rate, capped at 10.0. Returns np.nan if not computable.
+    """
+    if recent_days <= 0:
+        raise ValueError("recent_days must be positive")
+
+    # We ensure datetime type, drop missing values and sort in ascending order.
+    ts_sorted = pd.to_datetime(ts, errors="coerce", utc=True).dropna().sort_values()
+    if len(ts_sorted) < 4:
+        return np.nan  # We don't have enough data to compute a stable ratio
+
+    # We define cutoff as being the start of the recent window
+    cutoff = ts_sorted.max() - pd.Timedelta(days=int(recent_days))
+
+    # The recent window starts either at cutoff or at the dataset's min if the dataset is shorter
+    # recent_start = max(cutoff, ts_sorted.min())
+    # recent_span_days = (ts_sorted.max() - recent_start).total_seconds() / 86400.0
+    # recent_span_days = max(recent_span_days, 1.0)  # To avoid zero-division, we treat same-day span as 1 day
+
+    recent_count = int((ts_sorted >= cutoff).sum())
+    historical_count = int((ts_sorted < cutoff).sum())
+
+    # If there's no historical data, we cannot compute a ratio, so we return np.nan
     if historical_count == 0:
-        return 10.0 if recent_count > 0 else 1.0
-    
-    # Rate = count / days
-    total_days = (ts_sorted.max() - ts_sorted.min()).total_seconds() / 86400
-    if total_days == 0 or total_days <= recent_days:
-        return 1.0
-    
-    recent_rate = recent_count / recent_days
-    historical_rate = historical_count / (total_days - recent_days)
-    
-    # Cap the ratio to avoid extreme values
-    if historical_rate > 0:
-        ratio = recent_rate / historical_rate
-        return min(ratio, 10.0)  # Cap at 10x acceleration
-    else:
-        return 10.0
+        return np.nan 
+
+    # We compute the number of days in historical period (i.e., from first event to cutoff)
+    historical_days = (cutoff - ts_sorted.min()).total_seconds() / 86400.0
+    if historical_days <= 0:
+        return np.nan # Degenerate case
+
+    # We compute rates as recent events per recent days and historical events per historical days
+    recent_rate = recent_count / float(recent_days) # float(recent_span_days)
+    historical_rate = historical_count / float(historical_days)
+
+    if historical_rate <= 0:
+        return np.nan # Degenerate case
+
+    ratio = recent_rate / historical_rate
+    return float(min(ratio, float(cap)))
 
 
-# Build role-agnostic toxic event list per subreddit
+# We build role-agnostic toxic event list to extract temporal features
 toxic_df = interactions_df[interactions_df["TOXICITY_CAT"] == 1].copy()
 
+# We rename and stack SOURCE_SUBREDDIT and TARGET_SUBREDDIT into a single column
 long_toxic = pd.concat([
     toxic_df[["TIMESTAMP", "SOURCE_SUBREDDIT"]].rename(columns={"SOURCE_SUBREDDIT": "SUBREDDIT"}),
     toxic_df[["TIMESTAMP", "TARGET_SUBREDDIT"]].rename(columns={"TARGET_SUBREDDIT": "SUBREDDIT"}),
@@ -144,7 +306,7 @@ long_toxic.dropna(subset=["SUBREDDIT"], inplace=True)
 
 grp = long_toxic.groupby("SUBREDDIT")
 
-# Reference date for recency calculation
+# We extract the most recent day as reference for recency calculations
 reference_date = long_toxic["TIMESTAMP"].max()
 
 temporal_features = pd.DataFrame({
@@ -178,7 +340,7 @@ print(f"Total subreddits before filtering: {len(temporal_features)}")
 # CRITICAL: FILTER LOW-ACTIVITY SUBREDDITS
 # ====================
 # Remove subreddits with < 3 toxic events (reduces noise)
-temporal_features = temporal_features[temporal_features["tox_count_total"] >= 3].copy()
+temporal_features = temporal_features[temporal_features["tox_count_total"] >= 10].copy()
 print(f"Subreddits after filtering (>= 3 toxic events): {len(temporal_features)}")
 
 # ====================
