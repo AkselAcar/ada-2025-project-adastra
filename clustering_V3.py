@@ -1532,92 +1532,6 @@ print("  ALL toxicity is event-driven (news cycles, controversies, drama).")
 print("  'Aggressor' describes ROLE (who attacks), not CONSISTENCY.")
 print("="*60)
 
-# Visualize temporal pattern distributions
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-# Plot 1: Total Count by Pattern
-ax1 = axes[0, 0]
-for pattern in ['Chronic', 'Bursty', 'Mixed', 'Occasional']:
-    subset = result_df[result_df['temporal_pattern'] == pattern]['src_tox_count_raw']
-    if len(subset) > 0:
-        ax1.hist(subset, bins=30, alpha=0.6, label=f'{pattern} (n={len(subset)})')
-ax1.axvline(count_tertiles[0.33], color='red', linestyle='--', alpha=0.5, linewidth=2)
-ax1.axvline(count_tertiles[0.67], color='red', linestyle='--', alpha=0.5, linewidth=2)
-ax1.set_xlabel('Total Toxic Events (src_tox_count)', fontsize=11)
-ax1.set_ylabel('Frequency (log scale)', fontsize=11)
-ax1.set_yscale('log')
-ax1.set_title('Total Activity by Temporal Pattern', fontsize=12, fontweight='bold')
-ax1.legend()
-ax1.set_xlim(0, 150)
-ax1.grid(alpha=0.3)
-
-# Plot 2: Gap CV by Pattern
-ax2 = axes[0, 1]
-for pattern in ['Chronic', 'Bursty', 'Mixed', 'Occasional']:
-    subset = result_df[result_df['temporal_pattern'] == pattern]['src_gap_cv']
-    if len(subset) > 0:
-        ax2.hist(subset, bins=30, alpha=0.6, label=f'{pattern} (n={len(subset)})')
-ax2.axvline(cv_tertiles[0.33], color='red', linestyle='--', alpha=0.5, linewidth=2)
-ax2.axvline(cv_tertiles[0.67], color='red', linestyle='--', alpha=0.5, linewidth=2)
-ax2.set_xlabel('Gap Coefficient of Variation', fontsize=11)
-ax2.set_ylabel('Frequency (log scale)', fontsize=11)
-ax2.set_yscale('log')
-ax2.set_title('Regularity by Temporal Pattern (lower = more regular)', fontsize=12, fontweight='bold')
-ax2.legend()
-ax2.grid(alpha=0.3)
-
-# Plot 3: Max 30-day burst by Pattern
-ax3 = axes[1, 0]
-for pattern in ['Chronic', 'Bursty', 'Mixed', 'Occasional']:
-    subset = result_df[result_df['temporal_pattern'] == pattern]['src_max_30d_count_raw']
-    if len(subset) > 0:
-        ax3.hist(subset, bins=30, alpha=0.6, label=f'{pattern} (n={len(subset)})')
-ax3.axvline(burst_tertile, color='red', linestyle='--', alpha=0.5, linewidth=2)
-ax3.set_xlabel('Max Events in 30-Day Window', fontsize=11)
-ax3.set_ylabel('Frequency (log scale)', fontsize=11)
-ax3.set_yscale('log')
-ax3.set_title('Burst Intensity by Temporal Pattern', fontsize=12, fontweight='bold')
-ax3.legend()
-ax3.set_xlim(0, 50)
-ax3.grid(alpha=0.3)
-
-# Plot 4: Scatter of Gap CV vs Total Count (shows classification boundaries)
-ax4 = axes[1, 1]
-colors = {'Chronic': 'red', 'Bursty': 'orange', 'Mixed': 'gray', 'Occasional': 'blue'}
-for pattern in ['Chronic', 'Bursty', 'Mixed', 'Occasional']:
-    subset = result_df[result_df['temporal_pattern'] == pattern]
-    if len(subset) > 0:
-        ax4.scatter(subset['src_tox_count_raw'], subset['src_gap_cv'], 
-                   alpha=0.3, s=20, label=pattern, color=colors[pattern])
-
-ax4.axvline(count_tertiles[0.33], color='black', linestyle='--', alpha=0.3, linewidth=2)
-ax4.axvline(count_tertiles[0.67], color='black', linestyle='--', alpha=0.3, linewidth=2)
-ax4.axhline(cv_tertiles[0.33], color='black', linestyle='--', alpha=0.3, linewidth=2)
-ax4.axhline(cv_tertiles[0.67], color='black', linestyle='--', alpha=0.3, linewidth=2)
-
-# Annotate regions
-# Calculate median values for center annotation
-count_median = result_df['src_tox_count_raw'].median()
-cv_median = result_df['src_gap_cv'].median()
-
-ax4.text(count_tertiles[0.67]*1.2, cv_tertiles[0.33]*0.5, 'CHRONIC\n(high count,\nlow CV)', 
-         ha='left', va='center', fontsize=9, style='italic', color='red', weight='bold')
-ax4.text(count_tertiles[0.33]*0.5, cv_tertiles[0.67]*1.2, 'OCCASIONAL\n(low count)', 
-         ha='center', va='bottom', fontsize=9, style='italic', color='blue', weight='bold')
-ax4.text(count_median, cv_median, 'MIXED', 
-         ha='center', va='center', fontsize=11, style='italic', color='gray', weight='bold')
-
-ax4.set_xlabel('Total Toxic Events (src_tox_count)', fontsize=11)
-ax4.set_ylabel('Gap CV (irregularity)', fontsize=11)
-ax4.set_title('Classification Space: Gap CV vs Total Count', fontsize=12, fontweight='bold')
-ax4.legend(loc='upper right')
-ax4.set_xlim(0, 150)
-ax4.set_ylim(0, 2.5)
-ax4.grid(alpha=0.3)
-
-plt.tight_layout()
-plt.show()
-
 # Add cluster interpretation labels with activity levels and temporal patterns
 print("\n" + "="*60)
 print("CLUSTER ROLE INTERPRETATION (Activity + Role + Temporal Pattern)")
@@ -1666,10 +1580,10 @@ for cluster_id in cluster_summary.index:
 # ====================
 # VISUALIZATION
 # ====================
-plt.figure(figsize=(12, 5))
+plt.figure(figsize=(16, 5))
 
 # Plot 1: Embedding colored by cluster
-plt.subplot(1, 2, 1)
+plt.subplot(1, 3, 1)
 palette = sns.color_palette("husl", n_colors=len(set(cluster_labels))) if cluster_labels is not None else None
 sns.scatterplot(
     x="embed_x", y="embed_y", hue="cluster", data=result_df,
@@ -1681,8 +1595,21 @@ plt.ylabel(f"{reducer_name} 2")
 plt.legend(title="cluster", bbox_to_anchor=(1.05, 1), loc="upper left")
 plt.grid(alpha=0.2)
 
-# Plot 2: Feature importance (PCA variance)
-plt.subplot(1, 2, 2)
+# Plot 2: Embedding colored by temporal pattern
+plt.subplot(1, 3, 2)
+pattern_colors = {'Chronic': 'red', 'Bursty': 'orange', 'Mixed': 'gray', 'Occasional': 'blue'}
+sns.scatterplot(
+    x="embed_x", y="embed_y", hue="temporal_pattern", data=result_df,
+    palette=pattern_colors, s=50, alpha=0.85, edgecolor="white", linewidth=0.6
+)
+plt.title(f"Subreddit temporal patterns\n({reducer_name} projection)")
+plt.xlabel(f"{reducer_name} 1")
+plt.ylabel(f"{reducer_name} 2")
+plt.legend(title="temporal pattern", bbox_to_anchor=(1.05, 1), loc="upper left")
+plt.grid(alpha=0.2)
+
+# Plot 3: Feature importance (PCA variance)
+plt.subplot(1, 3, 3)
 pca_full = PCA(n_components=min(len(feature_cols), len(X_scaled)), random_state=42)
 pca_full.fit(X_scaled)
 explained_var = pca_full.explained_variance_ratio_ * 100

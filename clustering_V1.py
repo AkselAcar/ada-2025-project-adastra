@@ -655,3 +655,18 @@ plt.tight_layout()
 plt.show()
 
 result_df.head()
+
+
+def generate_receipt(dictionnaire, liste):
+    receipt = {}
+
+    for produit in liste:
+        if produit not in receipt:
+            receipt[produit] = 0
+        if produit in dictionnaire:
+            receipt[produit] += dictionnaire[produit]
+
+    return receipt
+
+
+
