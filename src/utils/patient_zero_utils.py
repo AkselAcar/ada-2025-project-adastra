@@ -9,7 +9,7 @@ from tigramite.data_processing import DataFrame as TDataFrame
 from tigramite.independence_tests.robust_parcorr import RobustParCorr
 from tigramite.pcmci import PCMCI
 
-MAX_TIME_WINDOW = pd.to_datetime([date(2013, 12, 31), date(2017, 4, 30)])
+MAX_TIME_WINDOW = pd.to_datetime([date(2013, 12, 31), date(2017, 4, 30)]).date
 
 def extract_focused_df(df, keyword="", time_window=None):
     """
@@ -95,15 +95,17 @@ def construct_interaction_count_df(df):
     return interaction_counts
 
 
-def construct_daily_interaction_df(df, keyword="", time_window=None):
+def construct_daily_interaction_df(df, keyword="", time_window=None, bin_freq="D"):
     """
-    Constructs the daily interaction count dataframe based on given dataframe. It includes 3 columns
-    (daily source interaction count, daily target interaction count and daily total interaction count)
-    and as many rows as the input dataframe, all related to a unique day (increasing in time).
+    Constructs the interaction count dataframe based on given dataframe.
+    It includes 3 columns (source interaction count, target interaction count
+    and total interaction count) and as many rows as the input dataframe,
+    all related to a unique time bin (increasing in time).
 
     :param df: dataframe from which to construct the interaction counts (panda dataframe)
     :param keyword: (OPTIONAL) keyword used to extract the sub-dataset (string)
     :param time_window: (OPTIONAL) time window used to extract the sub-dataset (python list of length 2)
+    :param bin_freq: (OPTIONAL) frequency of the time bins (e.g. "D", "4H", "1H")
 
     :return: daily_interactions (panda dataframe)
     """
@@ -113,67 +115,90 @@ def construct_daily_interaction_df(df, keyword="", time_window=None):
         time_window = MAX_TIME_WINDOW
 
     # Filter dataset by time window
-    mask = ((pd.to_datetime(df["TIMESTAMP"]).dt.date >= time_window[0]) &
-            (pd.to_datetime(df["TIMESTAMP"]).dt.date <= time_window[1]))
+    mask = (
+        (pd.to_datetime(df["TIMESTAMP"]).dt.date >= time_window[0]) &
+        (pd.to_datetime(df["TIMESTAMP"]).dt.date <= time_window[1])
+    )
     df = df.loc[mask]
 
-    # Count the number of source interactions per day
+    # Define time bins according to chosen frequency
+    time_bins = pd.to_datetime(df["TIMESTAMP"]).dt.floor(bin_freq)
+
+    # Count the number of source interactions per time bin
     daily_interactions_source = (
         df[df["SOURCE_SUBREDDIT"].str.contains(keyword, case=False, na=False)]
-        .groupby(pd.to_datetime(df["TIMESTAMP"]).dt.date)
+        .groupby(time_bins)
         .size()
         .rename("DAILY_SOURCE_INTERACTIONS")
     )
 
-    # Count the number of target interactions per day
+    # Count the number of target interactions per time bin
     daily_interactions_target = (
         df[df["TARGET_SUBREDDIT"].str.contains(keyword, case=False, na=False)]
-        .groupby(pd.to_datetime(df["TIMESTAMP"]).dt.date)
+        .groupby(time_bins)
         .size()
         .rename("DAILY_TARGET_INTERACTIONS")
     )
 
-    # Create the full date range (daily frequency)
-    time_range = pd.date_range(start=time_window[0], end=time_window[1], freq="D")
+    # Create the full time range with chosen frequency
+    time_range = pd.date_range(
+        start=pd.to_datetime(time_window[0]),
+        end=pd.to_datetime(time_window[1]),
+        freq=bin_freq
+    )
 
-    # Reindex to include missing days
-    daily_interactions_source = daily_interactions_source.reindex(time_range.date, fill_value=0)
-    daily_interactions_target = daily_interactions_target.reindex(time_range.date, fill_value=0)
+    # Reindex to include missing time bins
+    daily_interactions_source = daily_interactions_source.reindex(time_range, fill_value=0)
+    daily_interactions_target = daily_interactions_target.reindex(time_range, fill_value=0)
 
     # Concatenate into one dataframe
-    daily_interactions = pd.concat([daily_interactions_source, daily_interactions_target], axis=1)
+    daily_interactions = pd.concat(
+        [daily_interactions_source, daily_interactions_target],
+        axis=1
+    )
 
     # Add total column
     daily_interactions["DAILY_TOTAL_INTERACTIONS"] = (
-        daily_interactions["DAILY_SOURCE_INTERACTIONS"] + daily_interactions["DAILY_TARGET_INTERACTIONS"]
+        daily_interactions["DAILY_SOURCE_INTERACTIONS"] +
+        daily_interactions["DAILY_TARGET_INTERACTIONS"]
     )
 
-    # Convert index to datetime
+    # Ensure datetime index
     daily_interactions.index = pd.to_datetime(daily_interactions.index)
-    daily_interactions.index.name = "DAY"
+    daily_interactions.index.name = "TIME"
 
     return daily_interactions
 
-def construct_neg_interaction_df(df, time_window=None, criteria=None, threshold = None, upper=None, groupby_type="DAY"):
+
+
+def construct_neg_interaction_df(
+    df,
+    time_window=None,
+    criteria=None,
+    threshold=None,
+    upper=None,
+    groupby_type="DAY",
+    bin_freq="D"
+):
     """
     Constructs the negative interaction count (series or) dataframe based on given dataframe, given criterion,
     given thresholds and groupby type (daily, per subreddit, ...).
     It includes as many columns as criteria and as many rows as the input dataframe groupby_type has (number
-    of days, number of subreddits, ...). By default, a single criterion is considered
-    (LINK_SENTIMENT <= 0) and the whole time window is chosen to construct the dataframe grouped by day.
+    of time bins, number of subreddits, ...).
 
     :param df: dataframe from which to construct the interaction counts (panda dataframe)
     :param time_window: (OPTIONAL) time window used to extract the sub-dataset (python list of length 2)
     :param criteria: (OPTIONAL) list of criteria on which perform the counts (python list)
     :param threshold: (OPTIONAL) list of threshold for each criterion, upper or lower (python list)
-    :param upper: (OPTIONAL) whether if considered thresholds are upper (True) or lower (False) bounds (python list of booleans)
-    :param groupby_type: (OPTIONAL) type of grouping (typically "DAY", "SOURCE_SUBREDDIT" or "TARGET_SUBREDDIT", string)
+    :param upper: (OPTIONAL) whether if considered thresholds are upper (True) or lower (False) bounds
+    :param groupby_type: (OPTIONAL) type of grouping ("DAY", "SOURCE_SUBREDDIT", ...)
+    :param bin_freq: (OPTIONAL) time bin frequency ("D", "4h", "1h", ...)
 
     :return: neg_interaction_df (panda dataframe)
     """
 
     if criteria is None:
-        criteria = ['LINK_SENTIMENT']
+        criteria = ["LINK_SENTIMENT"]
 
     if threshold is None:
         threshold = [0]
@@ -188,9 +213,24 @@ def construct_neg_interaction_df(df, time_window=None, criteria=None, threshold 
     if time_window is None:
         time_window = MAX_TIME_WINDOW
 
+    df = df.copy()
+    df["TIMESTAMP"] = pd.to_datetime(df["TIMESTAMP"], errors="coerce")
+
+    # Filter by time window
+    mask = (
+        (df["TIMESTAMP"] >= pd.to_datetime(time_window[0])) &
+        (df["TIMESTAMP"] <= pd.to_datetime(time_window[1]))
+    )
+    df = df.loc[mask]
+
+    # --- Define grouping ---
     if groupby_type == "DAY":
-        groupby_key = pd.to_datetime(df["TIMESTAMP"]).dt.date
-        time_range = pd.date_range(start=time_window[0], end=time_window[1], freq="D")
+        groupby_key = pd.Grouper(key="TIMESTAMP", freq=bin_freq)
+        time_range = pd.date_range(
+            start=time_window[0],
+            end=time_window[1],
+            freq=bin_freq
+        )
         all_keys = None
     else:
         groupby_key = groupby_type
@@ -199,6 +239,7 @@ def construct_neg_interaction_df(df, time_window=None, criteria=None, threshold 
 
     neg_interaction_df = pd.DataFrame()
 
+    # --- Compute counts for each criterion ---
     for i in range(len(criteria)):
         upper_sign = 1 if upper[i] else -1
         column_name = f"{criteria[i]}_{threshold[i]}_{'UPPER' if upper[i] else 'LOWER'}"
@@ -209,21 +250,23 @@ def construct_neg_interaction_df(df, time_window=None, criteria=None, threshold 
             .count()
         )
 
+        # Reindex to ensure consistent shape
         if time_range is not None:
-            series.index = pd.to_datetime(series.index).normalize()
             series = series.reindex(time_range, fill_value=0)
         elif all_keys is not None:
             series = series.reindex(all_keys, fill_value=0)
 
         neg_interaction_df[column_name] = series
 
+    # Final index formatting
     if time_range is not None:
         neg_interaction_df.index = pd.to_datetime(neg_interaction_df.index)
-        neg_interaction_df.index.name = "DAY"
+        neg_interaction_df.index.name = "TIME"
     else:
         neg_interaction_df.index.name = groupby_type
 
     return neg_interaction_df
+
 
 def smart_df_add(df1, df2):
     """
@@ -252,23 +295,49 @@ def smart_df_add(df1, df2):
     return added_df
 
 
-def plot_daily_interactions(dataframe, day_interval = None, specifier = ""):
-    
-    fig, ax = plt.subplots(figsize=(10,4))
+def plot_daily_interactions(dataframe, bin_freq="D", bin_interval=None,
+                            specifier="", threshold=None):
 
-    dataframe.plot(ax = ax)
+    fig, ax = plt.subplots(figsize=(10, 4))
 
-    if(day_interval != None):
-        ax.xaxis.set_major_locator(mdates.DayLocator(interval=day_interval))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+    dataframe = dataframe.copy()
+
+    # 🔑 THE REAL FIX
+    if isinstance(dataframe.index, pd.PeriodIndex):
+        dataframe.index = dataframe.index.to_timestamp()
+
+    dataframe.index = pd.to_datetime(dataframe.index)
+
+    dataframe.plot(ax=ax)
+
+    # Locator
+    if bin_interval is not None:
+        if "h" in bin_freq.lower():
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=bin_interval))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
+            ax.set_xlabel("Time")
+        else:
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=bin_interval))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+            ax.set_xlabel("Day")
+
+    # Threshold
+    if threshold is not None:
+        ax.axhline(
+            y=threshold / 100 * dataframe.max().max(),
+            color="r",
+            linestyle="--",
+            label="Threshold"
+        )
+
     ax.tick_params(axis="x", rotation=45)
-    ax.set_xlabel("Day")
     ax.grid(axis="y", linestyle="--", alpha=0.6)
     ax.set_title(f"{specifier} Interactions over time")
-
     ax.set_ylabel(f"Number of {specifier} Interactions")
+
     plt.tight_layout()
     plt.show()
+
 
 
 def plot_top_interactors(interaction_count_df,
@@ -304,54 +373,73 @@ def plot_top_interactors(interaction_count_df,
     plt.tight_layout()
     plt.show()
 
-def construct_time_series_df(df, subreddit_names, time_window=None):
+def construct_time_series_df(event_ts, df, subreddit_names, time_window=None, bin_freq="D"):
+    """
+    Constructs a time series dataframe of interactions for given subreddits.
+    Each value corresponds to the number of interactions within a time bin.
+
+    :param event_ts: event time series
+    :param df: interactions dataframe
+    :param subreddit_names: list of subreddit names
+    :param time_window: time window [start, end]
+    :param bin_freq: time bin frequency ("D", "4H", "1H", ...)
+    """
 
     if time_window is None:
         time_window = MAX_TIME_WINDOW
 
     df = df.copy()
     df["TIMESTAMP"] = pd.to_datetime(df["TIMESTAMP"], errors="coerce")
-    df["DATE"] = df["TIMESTAMP"].dt.date
 
+    # Create time bins
+    df["TIME_BIN"] = df["TIMESTAMP"].dt.floor(bin_freq)
+
+    # Filter by subreddits and time window
     focused_df = df[
         (
             df["SOURCE_SUBREDDIT"].isin(subreddit_names) |
             df["TARGET_SUBREDDIT"].isin(subreddit_names)
         ) &
-        (df["DATE"] >= time_window[0]) &
-        (df["DATE"] <= time_window[1])
+        (df["TIME_BIN"] >= pd.to_datetime(time_window[0])) &
+        (df["TIME_BIN"] <= pd.to_datetime(time_window[1]))
     ]
 
+    # Long format: source + target
     long_df = pd.concat(
         [
-            focused_df[["DATE", "SOURCE_SUBREDDIT"]]
+            focused_df[["TIME_BIN", "SOURCE_SUBREDDIT"]]
             .rename(columns={"SOURCE_SUBREDDIT": "subreddit"}),
 
-            focused_df[["DATE", "TARGET_SUBREDDIT"]]
+            focused_df[["TIME_BIN", "TARGET_SUBREDDIT"]]
             .rename(columns={"TARGET_SUBREDDIT": "subreddit"})
         ],
         axis=0
     )
-    long_df = long_df[long_df["subreddit"].isin(subreddit_names)]
 
+    # Aggregate counts
     time_series_df = (
         long_df
-        .groupby(["DATE", "subreddit"])
+        .groupby(["TIME_BIN", "subreddit"])
         .size()
         .unstack(fill_value=0)
     )
 
+    # Full time index with chosen binning
     full_time_index = pd.date_range(
-        start=time_window[0],
-        end=time_window[1],
-        freq="D"
-    ).date
+        start=pd.to_datetime(time_window[0]),
+        end=pd.to_datetime(time_window[1]),
+        freq=bin_freq
+    )
 
+    # Reindex to ensure complete coverage
     time_series_df = (
         time_series_df
         .reindex(index=full_time_index, fill_value=0)
         .reindex(columns=subreddit_names, fill_value=0)
     )
+
+    time_series_df.index.name = "TIME"
+    time_series_df = pd.concat([time_series_df, event_ts], axis=1, join="inner")
 
     return time_series_df
 
@@ -429,23 +517,68 @@ def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False):
                 G.add_edge(src, tgt, label=lbl, weight=abs(eff))
 
         # Plot (for readability limit nodes if huge)
-        plt.figure(figsize=(14, 10))
-        pos = nx.spring_layout(G, k=0.6, seed=42)  # positions
+        plt.figure(figsize=(16, 12))
 
-        # draw nodes and labels
-        nx.draw_networkx_nodes(G, pos, node_size=600, node_color='lightblue')
-        nx.draw_networkx_labels(G, pos, font_size=9)
+        try:
+            pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
+        except:
+            pos = nx.kamada_kawai_layout(G)
 
-        # draw edges; use width scaled by 'weight'
-        edge_widths = [G[u][v]['weight']*2 for u, v in G.edges()]
-        nx.draw_networkx_edges(G, pos, width=edge_widths, arrowstyle='->', arrowsize=12)
+        # --- Force EVENT node to the center ---
+        if "EVENT" in pos:
+            pos["EVENT"] = np.array([0.0, 0.0])
 
-        # draw edge labels (lag + effect)
+        node_colors = [
+            "gold" if n == "EVENT" else "lightblue"
+            for n in G.nodes()
+        ]
+
+        node_sizes = [
+            1300 if n == "EVENT" else 900
+            for n in G.nodes()
+        ]
+
+        nx.draw_networkx_nodes(
+            G, pos,
+            node_size=node_sizes,
+            node_color=node_colors,
+            edgecolors="black"
+        )
+
+        nx.draw_networkx_labels(
+            G, pos,
+            font_size=10
+        )
+
+        edge_colors = []
+        edge_widths = []
+
+        for u, v in G.edges():
+            edge_widths.append(max(1.5, G[u][v]['weight'] * 3))
+            if u == "EVENT" or v == "EVENT":
+                edge_colors.append("crimson")   # edges involving EVENT
+            else:
+                edge_colors.append("gray")
+
+        nx.draw_networkx_edges(
+            G, pos,
+            width=edge_widths,
+            edge_color=edge_colors,
+            arrowstyle="->",
+            arrowsize=16,
+            alpha=0.85
+        )
+
+
         edge_labels = {(u, v): G[u][v]['label'] for u, v in G.edges()}
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7)
+        nx.draw_networkx_edge_labels(
+            G, pos,
+            edge_labels=edge_labels,
+            font_size=8
+        )
 
-        plt.title("PCMCI-discovered causal edges (lagged). Edge labels: lag / effect (ParCorr)")
-        plt.axis('off')
+        plt.title("PCMCI causal graph (lagged effects)")
+        plt.axis("off")
         plt.show()
 
     return p_matrix, val_matrix, edges
