@@ -1,9 +1,13 @@
 import pandas as pd
 import numpy as np
 import matplotlib.dates as mdates
+import networkx as nx
 import matplotlib.pyplot as plt
 import copy
 from datetime import date
+from tigramite.data_processing import DataFrame as TDataFrame
+from tigramite.independence_tests.robust_parcorr import RobustParCorr
+from tigramite.pcmci import PCMCI
 
 MAX_TIME_WINDOW = pd.to_datetime([date(2013, 12, 31), date(2017, 4, 30)])
 
@@ -299,3 +303,149 @@ def plot_top_interactors(interaction_count_df,
     ax.grid(axis="y", linestyle="--", alpha=0.6)
     plt.tight_layout()
     plt.show()
+
+def construct_time_series_df(df, subreddit_names, time_window=None):
+
+    if time_window is None:
+        time_window = MAX_TIME_WINDOW
+
+    df = df.copy()
+    df["TIMESTAMP"] = pd.to_datetime(df["TIMESTAMP"], errors="coerce")
+    df["DATE"] = df["TIMESTAMP"].dt.date
+
+    focused_df = df[
+        (
+            df["SOURCE_SUBREDDIT"].isin(subreddit_names) |
+            df["TARGET_SUBREDDIT"].isin(subreddit_names)
+        ) &
+        (df["DATE"] >= time_window[0]) &
+        (df["DATE"] <= time_window[1])
+    ]
+
+    long_df = pd.concat(
+        [
+            focused_df[["DATE", "SOURCE_SUBREDDIT"]]
+            .rename(columns={"SOURCE_SUBREDDIT": "subreddit"}),
+
+            focused_df[["DATE", "TARGET_SUBREDDIT"]]
+            .rename(columns={"TARGET_SUBREDDIT": "subreddit"})
+        ],
+        axis=0
+    )
+    long_df = long_df[long_df["subreddit"].isin(subreddit_names)]
+
+    time_series_df = (
+        long_df
+        .groupby(["DATE", "subreddit"])
+        .size()
+        .unstack(fill_value=0)
+    )
+
+    full_time_index = pd.date_range(
+        start=time_window[0],
+        end=time_window[1],
+        freq="D"
+    ).date
+
+    time_series_df = (
+        time_series_df
+        .reindex(index=full_time_index, fill_value=0)
+        .reindex(columns=subreddit_names, fill_value=0)
+    )
+
+    return time_series_df
+
+
+def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False):
+    """
+    Function performing PCMCI causal discovery on the given time series dataframe using tigramite library. 
+    Returns the p-value matrix, effect value matrix and list of significant edges discovered.
+    Optionally visualizes the discovered causal graph using networkx.
+    
+    :param time_series_df: Groupement of timeseries to perform PCMCI on (panda dataframe, T x N)
+    :param max_lag: Maximum time lag to consider (int)
+    :param alpha: Significance level used on p-value for link extraction (float)
+    :param show: Whether to visualize the discovered causal graph (boolean)
+
+    :return: p_matrix (N x N x max_lag+1), val_matrix (N x N x max_lag+1), edges (list of dicts)
+    """
+
+    print("Data transformation to tigramite format...")
+    # Data transformation to tigramite format
+    data_arr = time_series_df.values
+    var_names = list(time_series_df.columns)
+    tdata = TDataFrame(data_arr, var_names=var_names)
+
+    print("PCMCI from tigramite...")
+    # PCMCI from tigramite
+    parcorr = RobustParCorr(significance='analytic') # CI type: partial correlation test
+    pcmci = PCMCI(dataframe=tdata, cond_ind_test=parcorr)
+    results = pcmci.run_pcmci(tau_max=max_lag, pc_alpha=None)  # pc_alpha=None => we will control significance manually
+
+    print("Extracting results...")
+    # Extracting results
+    p_matrix = results['p_matrix']     # (p-values) N_vars x N_vars x max_lag+1
+    val_matrix = results['val_matrix'] # (effect values e.g. partial correlations) N_vars x N_vars x max_lag+1
+
+    print("Extracting significant links...")
+    # Extracting significant links based on provided alpha
+    edges = []
+    N = len(var_names)
+    for src in range(N):
+        for tgt in range(N):
+            for lag in range(1, max_lag+1): # skipping zero-lag
+                pval = p_matrix[src, tgt, lag]
+                if pval is not None and (pval < alpha):
+                    effect = val_matrix[src, tgt, lag]
+                    edges.append({
+                        'source': var_names[src],
+                        'target': var_names[tgt],
+                        'lag': lag,
+                        'pval': float(pval),
+                        'effect': float(effect)
+                    })
+    edges = sorted(edges, key=lambda e: (e['pval'], -abs(e['effect'])))
+
+    # Create NX digraph if show is True
+    if show:
+        G = nx.DiGraph()
+        G.add_nodes_from(var_names)
+
+        # for layout clarity, you may want to only visualize a subset (e.g., protagonist and top-K parents)
+        # Optionally filter edges to those involving protagonist:
+        # protagonist = 'protagonist'  # replace
+        # edges = [e for e in edges if (e['source']==protagonist or e['target']==protagonist)]
+
+        # Add edges with weight and label
+        for e in edges:
+            src, tgt, lag, eff = e['source'], e['target'], e['lag'], e['effect']
+            lbl = f"lag={lag}\n{eff:.2f}"
+            # if multiple edges between same nodes with different lag, we aggregate by writing both labels (simple approach)
+            if G.has_edge(src, tgt):
+                prev = G[src][tgt].get('label', '')
+                G[src][tgt]['label'] = prev + ' | ' + lbl
+                G[src][tgt]['weight'] += abs(eff)
+            else:
+                G.add_edge(src, tgt, label=lbl, weight=abs(eff))
+
+        # Plot (for readability limit nodes if huge)
+        plt.figure(figsize=(14, 10))
+        pos = nx.spring_layout(G, k=0.6, seed=42)  # positions
+
+        # draw nodes and labels
+        nx.draw_networkx_nodes(G, pos, node_size=600, node_color='lightblue')
+        nx.draw_networkx_labels(G, pos, font_size=9)
+
+        # draw edges; use width scaled by 'weight'
+        edge_widths = [G[u][v]['weight']*2 for u, v in G.edges()]
+        nx.draw_networkx_edges(G, pos, width=edge_widths, arrowstyle='->', arrowsize=12)
+
+        # draw edge labels (lag + effect)
+        edge_labels = {(u, v): G[u][v]['label'] for u, v in G.edges()}
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7)
+
+        plt.title("PCMCI-discovered causal edges (lagged). Edge labels: lag / effect (ParCorr)")
+        plt.axis('off')
+        plt.show()
+
+    return p_matrix, val_matrix, edges
