@@ -1775,7 +1775,7 @@ def create_interactive_plotly_visualization(result_df: pd.DataFrame, reducer_nam
             'embed_y': f'{reducer_name} 2',
             'cluster_str': 'Cluster'
         },
-        title=f'Subreddits mapped by Toxicity Dynamics<br><sub>({reducer_name} projection, clustered in {len(feature_cols)}D PC space)</sub>'
+        title=f'Subreddits mapped by Toxicity Dynamics<br><sub>({reducer_name} projection, clustered in {n_components_optimal}D PC space)</sub>'
     )
 
     # We update hover template with custom formatting and set hover colors to match markers
