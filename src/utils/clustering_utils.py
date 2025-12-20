@@ -10,6 +10,7 @@ from sklearn.metrics import silhouette_score, adjusted_rand_score
 from scipy import stats
 import plotly.express as px
 import plotly.graph_objects as go
+import umap
 
 
 def preliminary_control(df: pd.DataFrame) -> pd.DataFrame: 
@@ -49,11 +50,13 @@ def preliminary_control(df: pd.DataFrame) -> pd.DataFrame:
 
     return df, umap_available, hdbscan_available
 
-df, umap_available, hdbscan_available = preliminary_control(interactions_df)
+## df, umap_available, hdbscan_available = preliminary_control(interactions_df)
+
 
 # ====================
 # FEATURE ENGINEERING
 # ====================
+
 
 def median_gap_days(ts: pd.Series) -> float:
     """
@@ -239,15 +242,8 @@ def gap_cv(ts: pd.Series) -> float:
 # ROLE-AWARE FEATURE EXTRACTION
 # ====================
 
-# We build separate features for source (aggressor) and target (victim) roles
-toxic_df = interactions_df[interactions_df["TOXICITY_CAT"] == 1].copy()
-
-# We extract the most recent day as reference for recency calculations
-reference_date = toxic_df["TIMESTAMP"].max()
-
-print("\n" + "="*60)
-print("COMPUTING ROLE-AWARE TEMPORAL FEATURES")
-print("="*60)
+# # # We build separate features for source (aggressor) and target (victim) roles
+# # toxic_df = interactions_df[interactions_df["TOXICITY_CAT"] == 1].copy()
 
 # ===== SOURCE FEATURES (subreddit as aggressor) =====
 print("\nComputing SOURCE (aggressor) features...")
@@ -285,14 +281,16 @@ def comp_source_features(toxic_df: pd.DataFrame) -> pd.DataFrame:
     )
     source_features["src_event_rate"] = grp_src["TIMESTAMP"].apply(event_rate)
     source_features["src_pct_events_recent"] = grp_src["TIMESTAMP"].apply(pct_events_recent)
+    print(f"  SOURCE features computed for {len(source_features)} subreddits")
+
     return source_df, source_features
 
-source_df, source_features = comp_source_features(toxic_df)
-print(f"  SOURCE features computed for {len(source_features)} subreddits")
+# # source_df, source_features = comp_source_features(toxic_df)
+
 
 # ===== TARGET FEATURES (subreddit as victim) =====
-# Here we perfom the same oerations as above but for target subreddits
-print("\nComputing TARGET (victim) features...")
+# Here we perfom the same operations as above but for target subreddits
+
 
 def comp_target_features(toxic_df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -321,19 +319,36 @@ def comp_target_features(toxic_df: pd.DataFrame) -> pd.DataFrame:
     target_features["tgt_median_gap_days"] = grp_tgt["TIMESTAMP"].apply(median_gap_days)
     target_features["tgt_gap_cv"] = grp_tgt["TIMESTAMP"].apply(gap_cv)
     target_features["tgt_pct_events_recent"] = grp_tgt["TIMESTAMP"].apply(pct_events_recent)
+    print(f"  TARGET features computed for {len(target_features)} subreddits")
+
     return target_df, target_features
 
-target_df, target_features = comp_target_features(toxic_df)
-print(f"  TARGET features computed for {len(target_features)} subreddits")
+# # target_df, target_features = comp_target_features(toxic_df)
+
 
 # ===== NETWORK FEATURES =====
-print("\nComputing NETWORK features...")
 
-# We compute the out-degree as the number of unique subreddits one attacks
-out_degree = source_df.groupby("SOURCE_SUBREDDIT")["TARGET_SUBREDDIT"].nunique().rename("net_out_degree")
 
-# We compute the in-degree as the number of unique subreddits that attack one
-in_degree = target_df.groupby("TARGET_SUBREDDIT")["SOURCE_SUBREDDIT"].nunique().rename("net_in_degree")
+def compute_out_in_degree(source_df: pd.DataFrame, target_df: pd.DataFrame) -> (pd.Series, pd.Series):
+    """
+    This function computes out-degree and in-degree network features for subreddits.
+
+    Parameters:
+    source_df (pd.DataFrame): Dataframe containing SOURCE_SUBREDDIT and TARGET_SUBREDDIT columns.
+    target_df (pd.DataFrame): Dataframe containing SOURCE_SUBREDDIT and TARGET_SUBREDDIT columns.
+
+    Returns:
+    (pd.Series, pd.Series): Tuple of Series containing out-degree and in-degree features.
+    """
+    # We compute the out-degree as the number of unique subreddits one attacks
+    out_degree = source_df.groupby("SOURCE_SUBREDDIT")["TARGET_SUBREDDIT"].nunique().rename("net_out_degree")
+
+    # We compute the in-degree as the number of unique subreddits that attack one
+    in_degree = target_df.groupby("TARGET_SUBREDDIT")["SOURCE_SUBREDDIT"].nunique().rename("net_in_degree")
+
+    return out_degree, in_degree
+
+# # out_degree, in_degree = compute_out_in_degree(source_df, target_df)
 
 def compute_reciprocity(toxic_df: pd.DataFrame,subreddit_name: str) -> float:
     """
@@ -360,16 +375,29 @@ def compute_reciprocity(toxic_df: pd.DataFrame,subreddit_name: str) -> float:
     # Reciprocity is the fraction of outgoing edges that are reciprocated
     return reciprocated / len(outgoing)
 
-# We get all unique subreddits involved in toxic interactions
-all_subreddits = set(source_df["SOURCE_SUBREDDIT"].unique()) | set(target_df["TARGET_SUBREDDIT"].unique())
 
-# We compute reciprocity for each subreddit
-reciprocity = pd.Series({sub: compute_reciprocity(toxic_df, sub) for sub in all_subreddits}, name="net_reciprocity")
+def call_compute_reciprocity(source_df:pd.DataFrame, target_df: pd.DataFrame, toxic_df: pd.DataFrame) -> float:
+    """"
+    Wrapper function to call compute_reciprocity.
 
-print(f"  NETWORK features computed for {len(all_subreddits)} subreddits")
+    Parameters:
+    source_df (pd.DataFrame): Dataframe containing SOURCE_SUBREDDIT and TARGET_SUBREDDIT columns.
+    toxic_df (pd.DataFrame): Dataframe containing toxic interactions with SOURCE_SUBREDDIT and TARGET_SUBREDDIT columns.
+
+    Returns:
+    reciprocity (pd.Series): Series containing reciprocity value for each subreddit.
+    """
+    # We get all unique subreddits involved in toxic interactions
+    all_subreddits = set(source_df["SOURCE_SUBREDDIT"].unique()) | set(target_df["TARGET_SUBREDDIT"].unique())
+
+    # We compute reciprocity for each subreddit
+    reciprocity = pd.Series({sub: compute_reciprocity(toxic_df, sub) for sub in all_subreddits}, name="net_reciprocity")
+
+    return reciprocity
+
+# # reciprocity = call_compute_reciprocity(source_df, target_df, toxic_df)
 
 # ===== MERGE ALL FEATURES =====
-print("\nMerging role-aware and network features...")
 
 def merge_all_features(source_features: pd.DataFrame, target_features: pd.DataFrame, 
                        out_degree: pd.Series, in_degree: pd.Series, reciprocity: pd.Series) -> pd.DataFrame:
@@ -397,15 +425,18 @@ def merge_all_features(source_features: pd.DataFrame, target_features: pd.DataFr
     # We compute compute derived features
     temporal_features["net_toxicity"] = temporal_features["src_tox_count"] - temporal_features["tgt_tox_count"]
     temporal_features["total_tox_count"] = temporal_features["src_tox_count"] + temporal_features["tgt_tox_count"]
+    
+    print(f"\nTotal subreddits before filtering: {len(temporal_features)}")
 
     return temporal_features
 
-temporal_features = merge_all_features(source_features, target_features, out_degree, in_degree, reciprocity)
-print(f"\nTotal subreddits before filtering: {len(temporal_features)}")
+# # temporal_features = merge_all_features(source_features, target_features, out_degree, in_degree, reciprocity)
+
 
 # ====================
-# CRITICAL: FILTER LOW-ACTIVITY SUBREDDITS (TO BE DISCUSSED)
+# FILTER LOW-ACTIVITY SUBREDDITS
 # ====================
+
 
 def filter_low_activity(temporal_features: pd.DataFrame, min_toxic_events: int = 10) -> pd.DataFrame:
     """
@@ -420,14 +451,17 @@ def filter_low_activity(temporal_features: pd.DataFrame, min_toxic_events: int =
     """
     filtered_features = temporal_features[temporal_features["total_tox_count"] >= min_toxic_events].copy()
     
+    print(f"Subreddits after filtering (>= 10 total toxic events): {len(filtered_features)}")
+
     return filtered_features
 
-temporal_features = filter_low_activity(temporal_features, min_toxic_events=10)
-print(f"Subreddits after filtering (>= 10 total toxic events): {len(temporal_features)}")
+# # temporal_features = filter_low_activity(temporal_features, min_toxic_events=10)
+
 
 # ====================
 # NaN HANDLING
 # ====================
+
 
 def temporal_nan_handling(temporal_features: pd.DataFrame) -> pd.DataFrame:
     """
@@ -472,15 +506,14 @@ def other_nan_handling(temporal_features: pd.DataFrame) -> pd.DataFrame:
     
     return temporal_features
 
-temporal_features = temporal_nan_handling(temporal_features)
-temporal_features = other_nan_handling(temporal_features)
+# temporal_features = temporal_nan_handling(temporal_features)
+# temporal_features = other_nan_handling(temporal_features)
+
 
 # ====================
 # DIAGNOSTIC: Check for extreme outliers
 # ====================
-print("\n" + "="*60)
-print("EXTREME VALUE DIAGNOSTICS")
-print("="*60)
+
 
 def check_extreme_outliers(temporal_features: pd.DataFrame):
     """
@@ -505,7 +538,7 @@ def check_extreme_outliers(temporal_features: pd.DataFrame):
             if len(extreme) <= 10:
                 print(f"  Extreme subreddits: {list(extreme.index[:10])}")
 
-check_extreme_outliers(temporal_features)
+# # check_extreme_outliers(temporal_features)
 
 # ====================
 # OUTLIER HANDLING WITH LOG TRANSFORM
@@ -531,20 +564,17 @@ feature_cols = [
     "net_in_degree",
     "net_out_degree",
     "net_reciprocity",
-    # "net_toxicity",
 ]
 
 # Note: is_mega will be added after it's computed (line ~870)
 # We'll add it to features dataframe separately below
 
-features = temporal_features[feature_cols].copy()
+# # features = temporal_features[feature_cols].copy()
 
 # ====================
 # NaN IMPUTATION IMPACT REPORT
 # ====================
-print("\n" + "="*60)
-print("NaN IMPUTATION IMPACT REPORT")
-print("="*60)
+
 
 def report_nan_impact(temporal_features: pd.DataFrame, feature_cols: list):
     """
@@ -567,14 +597,12 @@ def report_nan_impact(temporal_features: pd.DataFrame, feature_cols: list):
     for category, strategy in imputation_strategy.items():
         print(f"  {category}: {strategy}")
 
-report_nan_impact(temporal_features, feature_cols)
+# # report_nan_impact(temporal_features, feature_cols)
 
 # ====================
 # FEATURE CORRELATION AND MULTICOLLINEARITY ANALYSIS
 # ====================
-print("\n" + "="*60)
-print("FEATURE CORRELATION AND MULTICOLLINEARITY ANALYSIS")
-print("="*60)
+
 
 def compute_feature_correlations(features: pd.DataFrame) -> pd.DataFrame:
     """
@@ -609,6 +637,7 @@ def compute_feature_correlations(features: pd.DataFrame) -> pd.DataFrame:
         print("\nNo highly correlated feature pairs found (|r| > 0.8)")
     
     return corr_matrix
+
 
 def compute_vif(features: pd.DataFrame) -> pd.DataFrame:
     """
@@ -650,15 +679,13 @@ def compute_vif(features: pd.DataFrame) -> pd.DataFrame:
     return vif_df
 
 # We perform correlation and VIF analysis
-corr_matrix = compute_feature_correlations(features)
-vif_scores = compute_vif(features)
+# corr_matrix = compute_feature_correlations(features)
+# vif_scores = compute_vif(features)
 
 # ====================
 # ITERATIVE VIF-BASED FEATURE REDUCTION
 # ====================
-print("\n" + "="*60)
-print("ITERATIVE VIF-BASED FEATURE REDUCTION")
-print("="*60)
+
 
 def remove_high_vif_features(features: pd.DataFrame, threshold: float = 10.0, max_iterations: int = 20) -> pd.DataFrame:
     """
@@ -726,25 +753,23 @@ def remove_high_vif_features(features: pd.DataFrame, threshold: float = 10.0, ma
         for feat, vif_val in removed_features:
             print(f"  - {feat:30s} (VIF={vif_val:.2f})")
     
-    return features_reduced, removed_features
+    # We update feature_cols to reflect removed features
+    feature_cols = list(features_reduced.columns)
+    features = features_reduced.copy()
+
+    print(f"\nUpdated feature list ({len(feature_cols)} features):")
+    for i, col in enumerate(feature_cols, 1):
+        print(f"  {i:2d}. {col}")
+    
+    return feature_cols, features, features_reduced, removed_features
 
 # We apply VIF-based feature reduction
-features_reduced, removed_features = remove_high_vif_features(features, threshold=10.0)
-
-# We update feature_cols to reflect removed features
-feature_cols = list(features_reduced.columns)
-features = features_reduced.copy()
-
-print(f"\nUpdated feature list ({len(feature_cols)} features):")
-for i, col in enumerate(feature_cols, 1):
-    print(f"  {i:2d}. {col}")
+# # feature_cols, features, features_reduced, removed_features = remove_high_vif_features(features, threshold=10.0)
 
 # ====================
 # FINAL VIF VERIFICATION
 # ====================
-print("\n" + "="*60)
-print("FINAL VIF VERIFICATION (After Feature Reduction)")
-print("="*60)
+
 
 def verify_final_vif(features: pd.DataFrame) -> pd.DataFrame:
     """
@@ -794,38 +819,48 @@ def verify_final_vif(features: pd.DataFrame) -> pd.DataFrame:
     
     return vif_df
 
-final_vif_scores = verify_final_vif(features)
+# # final_vif_scores = verify_final_vif(features)
 
-# Log-transform count-based columns to reduce effect of outliers
-# Note: is_mega is NOT log-transformed since it's binary (0/1)
-log_cols = [
-    "src_tox_count", "src_active_span_days", "src_median_gap_days", "src_gap_cv", 
-    "src_max_30d_count", "src_event_rate",
-    "tgt_tox_count", "tgt_active_span_days", "tgt_median_gap_days", "tgt_gap_cv",
-    "net_in_degree", "net_out_degree" # , "net_toxicity", "net_reciprocity"
-]
-for col in log_cols:
-    if col in features.columns:
-        features[col] = np.log1p(features[col])  # log1p handles 0 values by having lop1p(0) = 0
+def log_transform (features: pd.DataFrame) -> pd.DataFrame:
+    """
+    This function applies log-transformation to specified count-based features to reduce the effect of outliers.
 
-# We only apply winsorization for non-logged features (percentages, ratios, net_toxicity)
-# Note: We don't winsorize log-transformed features since log already handles outliers
-winsorize_cols_90 = ["net_toxicity", "src_pct_events_recent", "tgt_pct_events_recent"]  # net_toxicity is not log-transformed, needs capping
-winsorize_cols_95 = ["net_reciprocity"]
-# winsorize_cols_90 = ["src_pct_events_recent", "tgt_pct_events_recent"]  # net_toxicity is not log-transformed, needs capping
+    Parameters:
+    features (pd.DataFrame): Dataframe with features.
 
-def apply_winsorization(features: pd.DataFrame, cols: list, percentile: float) -> pd.DataFrame:
+    Returns:
+    features(pd.DataFrame): Dataframe with log-transformed features.
+    """
+    # Log-transform count-based columns to reduce effect of outliers
+    # Note: is_mega is NOT log-transformed since it's binary (0/1)
+    log_cols = [
+        "src_tox_count", "src_active_span_days", "src_median_gap_days", "src_gap_cv", 
+        "src_max_30d_count", "src_event_rate",
+        "tgt_tox_count", "tgt_active_span_days", "tgt_median_gap_days", "tgt_gap_cv",
+        "net_in_degree", "net_out_degree", "net_reciprocity"
+    ]
+    for col in log_cols:
+        if col in features.columns:
+            features[col] = np.log1p(features[col])  # log1p handles 0 values by having lop1p(0) = 0
+
+    return features
+
+# # features = log_transform(features)
+
+def apply_winsorization(features: pd.DataFrame, percentile: float) -> pd.DataFrame:
     """
     This function applies winsorization to specified columns of the features dataframe.
 
     Parameters:
     features (pd.DataFrame): Dataframe with features.
-    cols (list): List of column names to apply winsorization to.
     percentile (float): The percentile threshold for winsorization (e.g., 0.90 for 90th percentile).
 
     Returns:
     features(pd.DataFrame): Dataframe with winsorized features.
     """
+    # We only apply winsorization for non-logged features (percentages, ratios, net_toxicity)
+    # Note: We don't winsorize log-transformed features since log already handles outliers
+    cols = ["net_toxicity", "src_pct_events_recent", "tgt_pct_events_recent"]  # net_toxicity is not log-transformed, needs capping
     for col in cols:
         if col in features.columns:
             # For each specified column, we compute the percentile threshold and clip values above it
@@ -834,10 +869,9 @@ def apply_winsorization(features: pd.DataFrame, cols: list, percentile: float) -
             print(f"Winsorized {col} at {int(percentile*100)}th percentile: {p_thresh:.2f}")
     return features
 
-features = apply_winsorization(features, winsorize_cols_90, 0.90)
-features = apply_winsorization(features, winsorize_cols_95, 0.95)
+# # features = apply_winsorization(features, 0.90)
 
-# CRITICAL: we replace any remaining inf/nan values before scaling
+# We replace any remaining inf/nan values before scaling
 def handle_inf_nan(features: pd.DataFrame) -> pd.DataFrame:
     """
     This function replaces inf values with NaN and fills NaN values with median of each column.
@@ -850,48 +884,66 @@ def handle_inf_nan(features: pd.DataFrame) -> pd.DataFrame:
     """
     features.replace([np.inf, -np.inf], np.nan, inplace=True)
     features.fillna(features.median(), inplace=True)
+    
     return features
 
-features = handle_inf_nan(features)
+# # features = handle_inf_nan(features)
+
 
 # ====================
-# OUTLIER HANDLING: INCLUDE ALL SUBREDDITS (NO EXCLUSION)
+# DETECT MEGA-SUBREDDITS
 # ====================
 
-# NOTE: Previously, mega-subreddits (>99th percentile) were excluded from clustering.
-# Now we include ALL subreddits to capture the full spectrum of toxicity dynamics.
-print(f"\nIncluding all subreddits in clustering (no outlier exclusion)...")
-print(f"  Total subreddits for clustering: {len(temporal_features)}")
 
-# We identify mega-subreddits for labeling but DO NOT remove them
-mega_mask = (
-    (temporal_features["net_in_degree"] > temporal_features["net_in_degree"].quantile(0.99)) |
-    (temporal_features["net_out_degree"] > temporal_features["net_out_degree"].quantile(0.99)) |
-    (temporal_features["total_tox_count"] > temporal_features["total_tox_count"].quantile(0.99))
-)
+def detect_mega_subreddits(features: pd.DataFrame, temporal_features: pd.DataFrame, feature_cols: list) -> tuple:
+    """
+    This function detects mega-subreddits based on 99th percentile thresholds for key features.
+    Mega-subreddits are flagged for interpretation but not removed from clustering.
 
-print(f"  Mega-subreddits (>99th percentile): {mega_mask.sum()}")
-if mega_mask.sum() > 0:
-    print(f"    These will be included in clustering and labeled for interpretation")
-    print(f"\n  Top 10 mega-subreddits by total activity:")
-    mega_subreddits = temporal_features[mega_mask]
-    for idx, row in mega_subreddits.nlargest(10, 'total_tox_count')[['total_tox_count', 'src_tox_count', 'tgt_tox_count', 'net_in_degree', 'net_out_degree']].iterrows():
-        print(f"    {idx}: total={row['total_tox_count']:.0f}, src={row['src_tox_count']:.0f}, tgt={row['tgt_tox_count']:.0f}, in_deg={row['net_in_degree']:.0f}, out_deg={row['net_out_degree']:.0f}")
+    Parameters:
+    features (pd.DataFrame): Dataframe with features.
+    temporal_features (pd.DataFrame): Dataframe with all merged features.
+    feature_cols (list): List of feature column names.
 
-# Add mega-subreddit flag to temporal_features for later interpretation
-temporal_features['is_mega'] = mega_mask
+    Returns:
+    temporal_features(pd.DataFrame): Dataframe with 'is_mega' flag added.
+    feature_cols(list): Updated list of feature column names with 'is_mega' added.
+    """
+    print(f"  Total subreddits for clustering: {len(temporal_features)}")
 
-# Add is_mega to features for clustering (binary feature: 0 or 1)
-features['is_mega'] = temporal_features.loc[features.index, 'is_mega'].astype(int)
-feature_cols.append('is_mega')
-print(f"\n  Added 'is_mega' as binary feature (0/1) to clustering features")
-print(f"  Total features for clustering: {len(feature_cols)}")
+    # We identify mega-subreddits for labeling but DO NOT remove them
+    mega_mask = (
+        (temporal_features["net_in_degree"] > temporal_features["net_in_degree"].quantile(0.99)) |
+        (temporal_features["net_out_degree"] > temporal_features["net_out_degree"].quantile(0.99)) |
+        (temporal_features["total_tox_count"] > temporal_features["total_tox_count"].quantile(0.99))
+    )
 
-# We verify no inf/nan remain
-print(f"\nData quality check before scaling:")
-print(f"  NaN values: {features.isna().sum().sum()}")
-print(f"  Inf values: {np.isinf(features.values).sum()}")
-print(f"  Max value: {features.max().max():.2f}")
+    print(f"  Mega-subreddits (>99th percentile): {mega_mask.sum()}")
+    if mega_mask.sum() > 0:
+        print(f"    These will be included in clustering and labeled for interpretation")
+        print(f"\n  Top 10 mega-subreddits by total activity:")
+        mega_subreddits = temporal_features[mega_mask]
+        for idx, row in mega_subreddits.nlargest(10, 'total_tox_count')[['total_tox_count', 'src_tox_count', 'tgt_tox_count', 'net_in_degree', 'net_out_degree']].iterrows():
+            print(f"    {idx}: total={row['total_tox_count']:.0f}, src={row['src_tox_count']:.0f}, tgt={row['tgt_tox_count']:.0f}, in_deg={row['net_in_degree']:.0f}, out_deg={row['net_out_degree']:.0f}")
+
+    # Add mega-subreddit flag to temporal_features for later interpretation
+    temporal_features['is_mega'] = mega_mask
+
+    # Add is_mega to features for clustering (binary feature: 0 or 1)
+    features['is_mega'] = temporal_features.loc[features.index, 'is_mega'].astype(int)
+    feature_cols.append('is_mega')
+    print(f"\n  Added 'is_mega' as binary feature (0/1) to clustering features")
+    print(f"  Total features for clustering: {len(feature_cols)}")
+
+    # We verify no inf/nan remain
+    print(f"\nData quality check before scaling:")
+    print(f"  NaN values: {features.isna().sum().sum()}")
+    print(f"  Inf values: {np.isinf(features.values).sum()}")
+    print(f"  Max value: {features.max().max():.2f}")
+
+    return features, temporal_features, feature_cols
+
+# # features, temporal_features, feature_cols = detect_mega_subreddits(features, temporal_features, feature_cols)
 
 # ====================
 # STANDARD SCALING
@@ -914,42 +966,37 @@ def standard_scaling(features: pd.DataFrame) -> np.ndarray:
 
     return X_scaled
 
-X_scaled = standard_scaling(features)
-
-print(f"\nFeature summary after preprocessing:")
-print(features.describe())
+# # X_scaled = standard_scaling(features)
 
 # ====================
 # FEATURE IMPORTANCE ANALYSIS
 # ====================
-print("\n" + "="*60)
-print("FEATURE IMPORTANCE ANALYSIS (PCA Loadings)")
-print("="*60)
 
-# We create a PCA model that keeps all components for analysis
-pca_full = PCA(n_components=min(len(feature_cols), len(X_scaled)), random_state=42)
-pca_full.fit(X_scaled)
 
-def analyze_pca_components(pca_full: PCA, feature_cols: list, variance_threshold: float = 0.80) -> tuple:
+def analyze_pca_components(feature_cols: list, X_scaled: np.ndarray,variance_threshold: float = 0.80) -> tuple:
     """
     This function analyzes PCA components and determines optimal dimensionality.
     
     Parameters:
-    pca_full (PCA): Fitted PCA model with all components.
     feature_cols (list): List of feature column names.
+    X_scaled (np.ndarray): Numpy array with scaled features.
     variance_threshold (float): Cumulative variance threshold for component selection (default: 0.80).
     
     Returns:
     n_components_optimal(int): Optimal number of components to retain.
     feature_importance(pd.DataFrame): Dataframe with feature importance scores.
     """
+    # We create a PCA model that keeps all components for analysis
+    pca_full = PCA(n_components=min(len(feature_cols), len(X_scaled)), random_state=42)
+    pca_full.fit(X_scaled)
+
     # We compute the cumulative variance explained
     cumvar = np.cumsum(pca_full.explained_variance_ratio_)
     
     # We find the number of components needed to explain variance_threshold of variance
     n_components_optimal = np.argmax(cumvar >= variance_threshold) + 1
     
-    print(f"\nPCA Scree Analysis:")
+    print(f"\nAnalysis Results:")
     print(f"  Total components: {pca_full.n_components_}")
     print(f"  Components for {variance_threshold*100:.0f}% variance: {n_components_optimal}")
     print(f"  Variance explained by first {n_components_optimal} PCs: {cumvar[n_components_optimal-1]*100:.1f}%")
@@ -984,62 +1031,45 @@ def analyze_pca_components(pca_full: PCA, feature_cols: list, variance_threshold
     for idx, row in importance_df.head(10).iterrows():
         print(f"    {row['feature']:30s}: {row['importance_pct']:5.1f}%")
     
+    # We display the top features for first 3 PCs
+    print(f"\nTop features for first 3 principal components:")
+    for pc_idx in range(min(3, pca_full.n_components_)):
+        loadings = pca_full.components_[pc_idx]
+        variance = pca_full.explained_variance_ratio_[pc_idx] * 100
+        
+        # Get top 5 most important features ([::-1] is used to revese the order for descending instead of ascending)
+        top_indices = np.argsort(np.abs(loadings))[-5:][::-1]
+        
+        print(f"\nPC{pc_idx+1} ({variance:.1f}% variance):")
+        for idx in top_indices:
+            feat_name = feature_cols[idx]
+            loading = loadings[idx]
+            print(f"  {feat_name:30s}: {loading:+.3f}")
+
     return n_components_optimal, importance_df
 
-n_components_optimal, feature_importance_df = analyze_pca_components(pca_full, feature_cols, variance_threshold=0.80)
+# # n_components_optimal, feature_importance_df = analyze_pca_components(feature_cols, X_scaled, variance_threshold=0.80)
 
-# We display the top features for first 3 PCs
-print(f"\nTop features for first 3 principal components:")
-for pc_idx in range(min(3, pca_full.n_components_)):
-    loadings = pca_full.components_[pc_idx]
-    variance = pca_full.explained_variance_ratio_[pc_idx] * 100
-    
-    # Get top 5 most important features ([::-1] is used to revese the order for descending instead of ascending)
-    top_indices = np.argsort(np.abs(loadings))[-5:][::-1]
-    
-    print(f"\nPC{pc_idx+1} ({variance:.1f}% variance):")
-    for idx in top_indices:
-        feat_name = feature_cols[idx]
-        loading = loadings[idx]
-        print(f"  {feat_name:30s}: {loading:+.3f}")
 
 # ====================
 # TRANSFORM TO OPTIMAL PC SPACE FOR CLUSTERING
 # ====================
-print("\n" + "="*60)
-print(f"DYNAMIC DIMENSIONALITY REDUCTION")
-print("="*60)
 
-# We transform the scaled features to PC space with optimal dimensionality
-pca_optimal = PCA(n_components=n_components_optimal, random_state=42)
-X_pca = pca_optimal.fit_transform(X_scaled)
-
-print(f"\nTransformed data for clustering:")
-print(f"  Original feature space: {X_scaled.shape[1]}D")
-print(f"  Reduced PC space: {X_pca.shape[1]}D")
-print(f"  Variance retained: {np.sum(pca_optimal.explained_variance_ratio_)*100:.1f}%")
-print(f"  Dimensionality reduction: {(1 - X_pca.shape[1]/X_scaled.shape[1])*100:.1f}% fewer dimensions")
-print(f"\n  Clustering will be performed in {X_pca.shape[1]}D PC space")
-print(f"    This removes noise from {X_scaled.shape[1] - X_pca.shape[1]} dimensions contributing <{(1-0.80)*100:.0f}% variance")
-
-# ====================
-# DIMENSIONALITY REDUCTION TO 2D (for visualization only)
-# ====================
-print("\n" + "="*60)
-print(f"2D PROJECTION FOR VISUALIZATION")
-print("="*60)
-
-def dimensionality_reduction_2d(X_pca: np.ndarray, X_scaled: np.ndarray) -> np.ndarray:
+def dimensionality_reduction_2d(n_components_optimal: int, X_scaled: np.ndarray, umap_available: bool) -> np.ndarray:
     """
     This function reduces the PC space to 2D for visualization using UMAP if available, otherwise PCA.
 
     Parameters:
-    X_pca (np.ndarray): Numpy array with data in PC space.
+    n_components_optimal (int): Optimal number of components to retain.
+    X_scaled (np.ndarray): Numpy array with scaled features.
 
     Returns:
     embedding(np.ndarray): Numpy array with 2D projection of the data.
     reducer_name(str): Name of the dimensionality reduction method used.
     """
+    pca_optimal = PCA(n_components=n_components_optimal, random_state=42)
+    X_pca = pca_optimal.fit_transform(X_scaled)
+
     if umap_available:
         # We apply UMAP to the PC space (not original features)
         # We chose the number of neighbors as the square roolt of the number of samples (roughly 35 for 1338 samples)
@@ -1056,24 +1086,14 @@ def dimensionality_reduction_2d(X_pca: np.ndarray, X_scaled: np.ndarray) -> np.n
 
     print(f"  Note: 2D projection is for visualization only, clustering uses {X_pca.shape[1]}D PC space")
 
-    return embedding, reducer_name
+    return X_pca, embedding, reducer_name
 
-embedding, reducer_name = dimensionality_reduction_2d(X_pca, X_scaled)
-
-# ====================
-# CLUSTER IN OPTIMAL PC SPACE
-# ====================
-# CRITICAL: We cluster on PC space (not original features, not 2D projection)
-
-print("\n" + "="*60)
-print("CLUSTERING ALGORITHM COMPARISON")
-print("="*60)
-print(f"All clustering performed in {X_pca.shape[1]}D PC space (not original {X_scaled.shape[1]}D features)\n")
+# # X_pca, embedding, reducer_name = dimensionality_reduction_2d(n_components_optimal, X_scaled, umap_available)
 
 # ====================
 # KMEANS EVALUATION - Find best k
 # ====================
-print("\nEvaluating KMeans with multiple k values...")
+
 
 def compute_optimal_k(X_pca: np.ndarray, features: pd.DataFrame) -> int:
     """
@@ -1130,38 +1150,34 @@ def compute_optimal_k(X_pca: np.ndarray, features: pd.DataFrame) -> int:
     best_k = best_kmeans['k']
     print(f"  Selected: k={best_k} (silhouette={best_kmeans['silhouette']:.3f}, "
         f"balance={best_kmeans['balance_ratio']:.3f})")
-        
-    return best_k, best_kmeans
+    
+    # We use KMeans clustering results
+    cluster_labels = best_kmeans['labels']
+    cluster_method = f"KMeans (k={best_kmeans['k']}, silhouette={best_kmeans['silhouette']:.3f})"
+    best_k = best_kmeans['k']
+    print(f"\nUsing KMeans clustering on {X_pca.shape[1]}D PC space")
 
-best_k, best_kmeans = compute_optimal_k(X_pca, features)
+    return cluster_labels, cluster_method, best_k, best_kmeans
 
-# We use KMeans clustering results
-cluster_labels = best_kmeans['labels']
-cluster_method = f"KMeans (k={best_kmeans['k']}, silhouette={best_kmeans['silhouette']:.3f})"
-best_k = best_kmeans['k']
-print(f"\nUsing KMeans clustering on {X_pca.shape[1]}D PC space")
+# # cluster_labels, cluster_method, best_k, best_kmeans = compute_optimal_k(X_pca, features)
+
 
 # ====================
 # CLUSTER STABILITY VALIDATION (bootstrap)
 # ====================
-print("\n" + "="*60)
-print("CLUSTER STABILITY VALIDATION (Bootstrap)")
-print("="*60)
 
-def cluster_validation_bootstrap(X_pca: np.ndarray, cluster_labels: np.ndarray, n_bootstrap: int = 100) -> tuple:
+def cluster_validation_bootstrap(best_k: int, X_pca: np.ndarray, cluster_labels: np.ndarray, n_bootstrap: int = 100):
     """
     This function performs bootstrap validation of clustering stability using Adjusted Rand Index (ARI).
     
     Parameters:
+    best_k (int): Optimal number of clusters.
     X_pca (np.ndarray): PC-transformed feature matrix (reduced dimensionality).
     cluster_labels (np.ndarray): Cluster assignments from original clustering.
     n_bootstrap (int): Number of bootstrap samples to use (default: 100).
-    
+
     Returns:
-    ari_mean(float): Mean ARI score across bootstrap samples.
-    ari_std(float): Standard deviation of ARI scores.
-    ari_ci_lower(float): Lower bound of 95% confidence interval for ARI.
-    ari_ci_upper(float): Upper bound of 95% confidence interval for ARI.
+    None
     """
     ari_scores = []
     for i in range(n_bootstrap):
@@ -1182,22 +1198,20 @@ def cluster_validation_bootstrap(X_pca: np.ndarray, cluster_labels: np.ndarray, 
     ari_std = np.std(ari_scores)
     ari_ci_lower = np.percentile(ari_scores, 2.5)
     ari_ci_upper = np.percentile(ari_scores, 97.5)
+
+    print(f"Bootstrap ARI (mean ± std): {ari_mean:.3f} ± {ari_std:.3f}")
+    print(f"  95% Confidence Interval: [{ari_ci_lower:.3f}, {ari_ci_upper:.3f}]")
+    print(f"  Higher ARI (close to 1.0) = more stable clusters")
+    print(f"  Interpretation: {'STABLE' if ari_mean > 0.7 else 'MODERATE' if ari_mean > 0.5 else 'UNSTABLE'}")
     
-    return ari_mean, ari_std, ari_ci_lower, ari_ci_upper
 
-ari_mean, ari_std, ari_ci_lower, ari_ci_upper = cluster_validation_bootstrap(X_pca, cluster_labels, n_bootstrap=100)
+# # cluster_validation_bootstrap(best_k, X_pca, cluster_labels, n_bootstrap=100)
 
-print(f"Bootstrap ARI (mean ± std): {ari_mean:.3f} ± {ari_std:.3f}")
-print(f"  95% Confidence Interval: [{ari_ci_lower:.3f}, {ari_ci_upper:.3f}]")
-print(f"  Higher ARI (close to 1.0) = more stable clusters")
-print(f"  Interpretation: {'STABLE' if ari_mean > 0.7 else 'MODERATE' if ari_mean > 0.5 else 'UNSTABLE'}")
 
 # ====================
 # COMPREHENSIVE CLUSTER VALIDATION
 # ====================
-print("\n" + "="*60)
-print("COMPREHENSIVE CLUSTER VALIDATION")
-print("="*60)
+
 
 def validate_clusters_statistical(X_pca: np.ndarray, features: pd.DataFrame, cluster_labels: np.ndarray, feature_cols: list):
     """
@@ -1260,12 +1274,12 @@ def validate_clusters_statistical(X_pca: np.ndarray, features: pd.DataFrame, clu
             'h_statistic': h_stat,
             'p_value': p_value,
             'eta_squared': eta_squared,
-            'significant': p_value < 0.003125  # We use a Bonferroni-adjusted threshold 0.05/16 (standard 0.05 
-                                               # threshold divided by 16 as we perform 1 test per feature and we 
-                                               # have 16 features)
+            'significant': p_value < 0.05/len(feature_cols)  # We use a Bonferroni-adjusted threshold 0.05/#features (standard 0.05 
+                                                        # threshold divided by #features as we perform 1 test per feature and we 
+                                                        # have #features)
         })
         
-        if p_value < 0.003125:  # We use strict threshold due to multiple comparisons
+        if p_value < 0.05/len(feature_cols):  # We use strict threshold due to multiple comparisons
             significant_features.append(col)
     
     # We sort by effect size and show top discriminative features
@@ -1278,38 +1292,52 @@ def validate_clusters_statistical(X_pca: np.ndarray, features: pd.DataFrame, clu
     results['feature_tests'] = feature_test_results
     results['n_significant_features'] = len(significant_features)
     
-    print(f"\nSignificant features (p < 0.003125): {len(significant_features)}/{len(feature_cols)}")
+    print(f"\nSignificant features (p < 0.0.05/len(feature_cols)): {len(significant_features)}/{len(feature_cols)}")
     if len(significant_features) < len(feature_cols) * 0.5:
         print(f"    WARNING: Less than 50% of features significantly discriminate clusters")
         print(f"    This suggests clusters may not be well-separated or features may be redundant")
     
     return results
 
-validation_results = validate_clusters_statistical(X_pca, features, cluster_labels, feature_cols)
+# # validation_results = validate_clusters_statistical(X_pca, features, cluster_labels, feature_cols)
 
 # ====================
 # SILHOUETTE COMPARISON (PC space vs original space)
 # ====================
-silhouette_pca = silhouette_score(X_pca, cluster_labels) if len(set(cluster_labels)) > 1 else -1
-silhouette_original = silhouette_score(X_scaled, cluster_labels) if len(set(cluster_labels)) > 1 else -1
 
-print(f"\nSilhouette Score Comparison:")
-print(f"  {X_pca.shape[1]}D PC space (USED FOR CLUSTERING): {silhouette_pca:.3f}")
-print(f"  Original {len(feature_cols)}D feature space: {silhouette_original:.3f}")
-print(f"\n  PC space ({X_pca.shape[1]}D) vs Original space ({len(feature_cols)}D): {'BETTER' if silhouette_pca > silhouette_original else 'WORSE'}")
-print(f"    Improvement: {(silhouette_pca - silhouette_original):.3f} ({((silhouette_pca - silhouette_original)/abs(silhouette_original)*100):.1f}%)")
+def silhouette_comparison(X_pca: np.ndarray, X_scaled: np.ndarray, cluster_labels: np.ndarray, feature_cols: list):
+    """
+    This function compares silhouette scores in PC space vs original feature space.
+    
+    Parameters:
+    X_pca (np.ndarray): Numpy array with data in PC space.
+    X_scaled (np.ndarray): Numpy array with scaled original features.
+    cluster_labels (np.ndarray): Cluster assignments.
+    feature_cols (list): List of feature column names.
+    
+    Returns:
+    None
+    """
+    silhouette_pca = silhouette_score(X_pca, cluster_labels) if len(set(cluster_labels)) > 1 else -1
+    silhouette_original = silhouette_score(X_scaled, cluster_labels) if len(set(cluster_labels)) > 1 else -1
 
-# WARNING for suspiciously high scores
-if silhouette_original > 0.9:
-    print(f"\n  WARNING: Silhouette > 0.9 suggests outlier-driven clustering")
-    print(f"    This often means a few extreme points are being separated,")
-    print(f"    not meaningful pattern discovery in the main data.")
+    print(f"\nSilhouette Score Comparison:")
+    print(f"  {X_pca.shape[1]}D PC space (USED FOR CLUSTERING): {silhouette_pca:.3f}")
+    print(f"  Original {len(feature_cols)}D feature space: {silhouette_original:.3f}")
+    print(f"\n  PC space ({X_pca.shape[1]}D) vs Original space ({len(feature_cols)}D): {'BETTER' if silhouette_pca > silhouette_original else 'WORSE'}")
+    print(f"    Improvement: {(silhouette_pca - silhouette_original):.3f} ({((silhouette_pca - silhouette_original)/abs(silhouette_original)*100):.1f}%)")
+
+    # Warninig raised for suspiciously high scores
+    if silhouette_original > 0.9:
+        print(f"\n  WARNING: Silhouette > 0.9 suggests outlier-driven clustering")
+        print(f"    This often means a few extreme points are being separated,")
+        print(f"    not meaningful pattern discovery in the main data.")
 
 # ====================
 # RESULTS ASSEMBLY
 # ====================
 
-def assemble_results_dataframe(features: pd.DataFrame, feature_cols: list,cluster_labels: np.ndarray, embedding: np.ndarray, temporal_features: pd.DataFrame) -> pd.DataFrame:
+def assemble_results_dataframe(features: pd.DataFrame, feature_cols: list,cluster_labels: np.ndarray, embedding: np.ndarray, temporal_features: pd.DataFrame, reducer_name: str, cluster_method: str, X_pca: np.ndarray) -> pd.DataFrame:
     """
     This function assembles the final results dataframe with cluster assignments and 2D embeddings.
     
@@ -1389,14 +1417,12 @@ def assemble_results_dataframe(features: pd.DataFrame, feature_cols: list,cluste
 
     return result_df, cluster_summary
 
-result_df, cluster_summary = assemble_results_dataframe(features, feature_cols, cluster_labels, embedding, temporal_features)
+# # result_df, cluster_summary = assemble_results_dataframe(features, feature_cols, cluster_labels, embedding, temporal_features, reducer_name, cluster_method, X_pca)
 
 # ====================
 # TEMPORAL TOXICITY PATTERN CLASSIFICATION
 # ====================
-print("\n" + "="*60)
-print("TEMPORAL TOXICITY PATTERN CLASSIFICATION")
-print("="*60)
+
 
 def classify_temporal_patterns(result_df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -1500,14 +1526,12 @@ def classify_temporal_patterns(result_df: pd.DataFrame) -> pd.DataFrame:
 
     return result_df
 
-result_df = classify_temporal_patterns(result_df)
+# # result_df = classify_temporal_patterns(result_df)
 
 # ====================
 # TEMPORAL PATTERN DEEP DIVE ANALYSIS (ROLE-AWARE)
 # ====================
-print("\n" + "="*60)
-print("TEMPORAL PATTERN CHARACTERISTICS ANALYSIS (Role-Aware)")
-print("="*60)
+
 
 def pattern_characteristics_analysis(result_df: pd.DataFrame):
     """
@@ -1575,10 +1599,6 @@ def pattern_characteristics_analysis(result_df: pd.DataFrame):
     print("  their dominant role's temporal dynamics.")
     print("="*60)
 
-# Add cluster interpretation labels with activity levels and temporal patterns
-print("\n" + "="*60)
-print("CLUSTER ROLE INTERPRETATION (Activity + Role + Temporal Pattern)")
-print("="*60)
 
 def cluster_role_interpretation(result_df: pd.DataFrame, cluster_summary: pd.DataFrame):
     """
@@ -1659,74 +1679,108 @@ def cluster_role_interpretation(result_df: pd.DataFrame, cluster_summary: pd.Dat
 
     return result_df
 
-result_df = cluster_role_interpretation(result_df, cluster_summary)
+# # result_df = cluster_role_interpretation(result_df, cluster_summary)
 
 # ====================
 # VISUALIZATION
 # ====================
-plt.figure(figsize=(16, 5))
 
-# Plot 1: Embedding colored by cluster
-plt.subplot(1, 3, 1)
-palette = sns.color_palette("husl", n_colors=len(set(cluster_labels))) if cluster_labels is not None else None
-sns.scatterplot(
-    x="embed_x", y="embed_y", hue="cluster", data=result_df,
-    palette=palette, s=50, alpha=0.85, edgecolor="white", linewidth=0.6
-)
-plt.title(f"Subreddit temporal toxicity dynamics\n({reducer_name} projection, clustered in {len(feature_cols)}D)")
-plt.xlabel(f"{reducer_name} 1")
-plt.ylabel(f"{reducer_name} 2")
-plt.legend(title="cluster", bbox_to_anchor=(1.05, 1), loc="upper left")
-plt.grid(alpha=0.2)
+def plot_cluster_results(result_df: pd.DataFrame, reducer_name: str, feature_cols: list, cluster_labels: np.ndarray, X_scaled: np.ndarray, n_components_optimal: int):
+    """
+    This function creates visualizations of clustering results using Matplotlib and Seaborn.
+    
+    Parameters:
+    result_df (pd.DataFrame): Dataframe with cluster assignments, embeddings, and features.
+    reducer_name (str): Name of the dimensionality reduction method used (e.g., "UMAP", "PCA").
+    feature_cols (list): List of feature column names.
+    cluster_labels (np.ndarray): Cluster assignments.
+    X_scaled (np.ndarray): Scaled original features.
+    n_components_optimal (int): Number of principal components used for clustering.
+    
+    Returns:
+    None
+    """
+    plt.clf()
+    plt.figure(figsize=(16, 5))
 
-# Plot 2: Embedding colored by temporal pattern
-plt.subplot(1, 3, 2)
-pattern_colors = {'Chronic': 'red', 'Bursty': 'orange', 'Mixed': 'gray', 'Occasional': 'blue'}
-sns.scatterplot(
-    x="embed_x", y="embed_y", hue="temporal_pattern", data=result_df,
-    palette=pattern_colors, s=50, alpha=0.85, edgecolor="white", linewidth=0.6
-)
-plt.title(f"Subreddit temporal patterns\n({reducer_name} projection)")
-plt.xlabel(f"{reducer_name} 1")
-plt.ylabel(f"{reducer_name} 2")
-plt.legend(title="temporal pattern", bbox_to_anchor=(1.05, 1), loc="upper left")
-plt.grid(alpha=0.2)
+    # Plot 1: Embedding colored by cluster
+    plt.subplot(1, 3, 1)
+    palette = sns.color_palette("husl", n_colors=len(set(cluster_labels))) if cluster_labels is not None else None
+    sns.scatterplot(
+        x="embed_x", y="embed_y", hue="cluster", data=result_df,
+        palette=palette, s=50, alpha=0.85, edgecolor="white", linewidth=0.6
+    )
+    plt.title(f"Subreddit temporal toxicity dynamics\n({reducer_name} projection, clustered in {len(feature_cols)}D)")
+    plt.xlabel(f"{reducer_name} 1")
+    plt.ylabel(f"{reducer_name} 2")
+    plt.legend(title="cluster", bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.grid(alpha=0.2)
 
-# Plot 3: Feature importance (PCA variance)
-plt.subplot(1, 3, 3)
-pca_full = PCA(n_components=min(len(feature_cols), len(X_scaled)), random_state=42)
-pca_full.fit(X_scaled)
-explained_var = pca_full.explained_variance_ratio_ * 100
-num_pcs = len(explained_var)
-bar_positions = np.arange(1, num_pcs + 1)
-bars = plt.bar(bar_positions, explained_var)
-plt.xlabel("Principal Component")
-plt.ylabel("Variance Explained (%)")
-plt.title(f"PCA Variance Explained\n(Total: {pca_full.explained_variance_ratio_.sum()*100:.1f}%)")
-plt.grid(alpha=0.2, axis='y')
+    # Plot 2: Embedding colored by temporal pattern
+    plt.subplot(1, 3, 2)
+    pattern_colors = {'Chronic': 'red', 'Bursty': 'orange', 'Mixed': 'gray', 'Occasional': 'blue'}
+    sns.scatterplot(
+        x="embed_x", y="embed_y", hue="temporal_pattern", data=result_df,
+        palette=pattern_colors, s=50, alpha=0.85, edgecolor="white", linewidth=0.6
+    )
+    plt.title(f"Subreddit temporal patterns\n({reducer_name} projection)")
+    plt.xlabel(f"{reducer_name} 1")
+    plt.ylabel(f"{reducer_name} 2")
+    plt.legend(title="temporal pattern", bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.grid(alpha=0.2)
 
+    # Plot 3: Feature importance (PCA variance)
+    plt.subplot(1, 3, 3)
+    pca_full = PCA(n_components=min(len(feature_cols), len(X_scaled)), random_state=42)
+    pca_full.fit(X_scaled)
+    explained_var = pca_full.explained_variance_ratio_ * 100
+    num_pcs = len(explained_var)
+    bar_positions = np.arange(1, num_pcs + 1)
+    bars = plt.bar(bar_positions, explained_var)
+    plt.xlabel("Principal Component")
+    plt.ylabel("Variance Explained (%)")
+    plt.title(f"PCA Variance Explained\n(Total: {pca_full.explained_variance_ratio_.sum()*100:.1f}%)")
+    plt.grid(alpha=0.2, axis='y')
 
-# Print variance explained by each PC and its top feature in the output cell only
-print("\nVariance explained by each principal component and its top feature:")
-print(f"(First {n_components_optimal} PCs were retained for clustering, explaining {np.sum(pca_full.explained_variance_ratio_[:n_components_optimal])*100:.1f}% variance)")
-for i, (var, comp) in enumerate(zip(explained_var, pca_full.components_)):
-    top_idx = np.argmax(np.abs(comp))
-    top_feature = feature_cols[top_idx]
-    retained_marker = " ← RETAINED" if i < n_components_optimal else " (discarded)"
-    print(f"PC{i+1}: {var:.2f}% variance, top feature: {top_feature}{retained_marker}")
+    plt.tight_layout()
+    plt.show()
 
-plt.tight_layout()
-plt.show()
+# # plot_cluster_results(result_df, reducer_name, feature_cols, cluster_labels, X_scaled, n_components_optimal)
+
+def plot_variance_explained(X_scaled: np.ndarray, feature_cols: list, n_components_optimal: int):
+    """
+    This function plots the variance explained by each principal component and identifies top features.
+    Parameters:
+    pca_full (PCA): Fitted PCA object on the full feature set.
+    feature_cols (list): List of feature column names.
+    n_components_optimal (int): Number of principal components used for clustering.
+
+    Returns:
+    None
+    """
+    pca_full = PCA(n_components=min(len(feature_cols), len(X_scaled)), random_state=42)
+    pca_full.fit(X_scaled)
+    explained_var = pca_full.explained_variance_ratio_ * 100
+
+    # Print variance explained by each PC and its top feature in the output cell only
+    print("\nVariance explained by each principal component and its top feature:")
+    print(f"(First {n_components_optimal} PCs were retained for clustering, explaining {np.sum(pca_full.explained_variance_ratio_[:n_components_optimal])*100:.1f}% variance)")
+    for i, (var, comp) in enumerate(zip(explained_var, pca_full.components_)):
+        top_idx = np.argmax(np.abs(comp))
+        top_feature = feature_cols[top_idx]
+        retained_marker = " ← RETAINED" if i < n_components_optimal else " (discarded)"
+        print(f"PC{i+1}: {var:.2f}% variance, top feature: {top_feature}{retained_marker}")
+
+# # plot_variance_explained(X_scaled, feature_cols, n_components_optimal)
+
 
 # ====================
 # INTERACTIVE PLOTLY VISUALIZATION
 # ====================
-print("\n" + "="*60)
-print("CREATING INTERACTIVE PLOTLY VISUALIZATION")
-print("="*60)
+
 
 def create_interactive_plotly_visualization(result_df: pd.DataFrame, reducer_name: str, 
-                                           feature_cols: list, output_path: str = "subreddit_clustering_interactive.html"):
+                                           feature_cols: list, n_components_optimal: int, output_path: str = "subreddit_clustering_interactive.html"):
     """
     This function creates an interactive Plotly scatter plot with cluster visualization and hover information.
     
@@ -1830,19 +1884,15 @@ def create_interactive_plotly_visualization(result_df: pd.DataFrame, reducer_nam
 
     # We export to HTML file
     fig.write_html(output_path, config=config)
-    print(f"\n✓ Interactive plot exported to: {output_path}")
+    print(f"\n  Interactive plot exported to: {output_path}")
     print(f"  Ready for embedding in Jekyll website")
     
-    return fig
 
-fig = create_interactive_plotly_visualization(result_df, reducer_name, feature_cols)
+# # create_interactive_plotly_visualization(result_df, reducer_name, feature_cols)
 
 # ====================
 # MEGA-SUBREDDIT ANALYSIS (WITHIN CLUSTERS)
 # ====================
-print("\n" + "="*60)
-print("MEGA-SUBREDDIT ANALYSIS (WITHIN CLUSTERS)")
-print("="*60)
 
 def analyze_mega_subreddits_in_clusters(result_df: pd.DataFrame, n_top: int = 15):
     """
@@ -1893,26 +1943,4 @@ def analyze_mega_subreddits_in_clusters(result_df: pd.DataFrame, n_top: int = 15
     
     return mega_df
 
-if 'result_df' in locals():
-    mega_summary = analyze_mega_subreddits_in_clusters(result_df, n_top=15)
-
-# ====================
-# FINAL OUTPUT
-# ====================
-print("\n" + "="*60)
-print("CLUSTERING PIPELINE COMPLETE")
-print("="*60)
-print(f"\nFinal dataset: {len(result_df)} subreddits clustered into {len(result_df['cluster'].unique())} groups")
-if 'is_mega' in result_df.columns:
-    mega_count = result_df['is_mega'].sum()
-    print(f"Mega-subreddits included: {mega_count} ({100*mega_count/len(result_df):.1f}% of total)")
-else:
-    print(f"Mega-subreddits: Not tracked")
-print(f"\nKey outputs:")
-print(f"  - result_df: Main results with cluster assignments and features")
-print(f"  - cluster_summary: Median characteristics per cluster")
-print(f"  - validation_results: Statistical validation metrics")
-print(f"  - mega_summary: Analysis of mega-subreddits within clusters")
-print(f"  - Interactive plot: subreddit_clustering_interactive.html")
-
-result_df.head()
+# # mega_summary = analyze_mega_subreddits_in_clusters(result_df, n_top=15)
