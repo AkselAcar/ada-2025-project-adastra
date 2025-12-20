@@ -127,7 +127,8 @@ def evaluate_props_norm_diffs(interactions_df, threshold):
     }).T  # transpose so rows are min/median/max
 
     # Display all columns without truncation
-    display(props_stats)
+    #display(props_stats)
+    print("test lala")
 
     props_mean = props_only.mean()
     props_std = props_only.std()
@@ -297,4 +298,34 @@ def cross_count_SENTIMENT_TOXICITY(interactions_df):
     ax[1].set_title("Proportion of TOXICITY_CAT")
     ax[1].set_xlabel("LINK_SENTIMENT")
     plt.tight_layout()
+    plt.show()
+
+
+def hyperlink_activity_over_time(interactions_df):
+    interactions_df["year_month"] = interactions_df["TIMESTAMP"].dt.to_period("M").dt.to_timestamp()
+
+    links_over_time_sent = (
+        interactions_df.groupby(["year_month", "TOXICITY_CAT"])
+        .size()
+        .reset_index(name="n_links")
+    )
+
+    links_over_time_pivot = links_over_time_sent.pivot(
+        index="year_month", columns="TOXICITY_CAT", values="n_links"
+    ).fillna(0)
+
+    links_over_time_pivot["total"] = links_over_time_pivot.sum(axis=1)
+    toxicity_counts = interactions_df["TOXICITY_CAT"].value_counts()
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(links_over_time_pivot.index, links_over_time_pivot[0], label=f"Non-toxic links \n(total:{toxicity_counts[0]})", color=color_nontox)
+    plt.plot(links_over_time_pivot.index, links_over_time_pivot[1], label=f"Toxic links \n(total:{toxicity_counts[1]})", color=color_tox)
+    plt.plot(links_over_time_pivot.index, links_over_time_pivot["total"], label="Total links", color="black", alpha = 0.7, linestyle = '--')
+
+    plt.title("Hyperlink Activity Over Time - log-scale y")
+    plt.xlabel("Month")
+    plt.ylabel("Nb of links")
+    plt.yscale("log")
+    plt.legend()
+    plt.grid(True)
     plt.show()
