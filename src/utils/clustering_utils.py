@@ -1710,7 +1710,7 @@ def plot_cluster_results(result_df: pd.DataFrame, reducer_name: str, feature_col
         x="embed_x", y="embed_y", hue="cluster", data=result_df,
         palette=palette, s=50, alpha=0.85, edgecolor="white", linewidth=0.6
     )
-    plt.title(f"Subreddit temporal toxicity dynamics\n({reducer_name} projection, clustered in {len(feature_cols)}D)")
+    plt.title(f"Subreddit temporal toxicity dynamics\n({reducer_name} projection, clustered in optimal {n_components_optimal}D)")
     plt.xlabel(f"{reducer_name} 1")
     plt.ylabel(f"{reducer_name} 2")
     plt.legend(title="cluster", bbox_to_anchor=(1.05, 1), loc="upper left")
