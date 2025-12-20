@@ -26,6 +26,7 @@ def preliminary_control(df: pd.DataFrame) -> pd.DataFrame:
     try:
         import umap
         umap_available = True
+        reducer_name = "UMAP"
     except Exception:
         umap_available = False
 
@@ -48,7 +49,7 @@ def preliminary_control(df: pd.DataFrame) -> pd.DataFrame:
             toxicity_threshold = df["TOXICITY_SCORE"].quantile(0.75)
         df["TOXICITY_CAT"] = (df["TOXICITY_SCORE"] >= toxicity_threshold).astype(int)
 
-    return df, umap_available, hdbscan_available
+    return df, umap_available, hdbscan_available, reducer_name
 
 ## df, umap_available, hdbscan_available = preliminary_control(interactions_df)
 
@@ -748,19 +749,10 @@ def remove_high_vif_features(features: pd.DataFrame, threshold: float = 10.0, ma
     print(f"  Features removed: {len(removed_features)}")
     print(f"  Features remaining: {len(features_reduced.columns)}")
     
-    if removed_features:
-        print(f"\nRemoved features (in order):")
-        for feat, vif_val in removed_features:
-            print(f"  - {feat:30s} (VIF={vif_val:.2f})")
-    
     # We update feature_cols to reflect removed features
     feature_cols = list(features_reduced.columns)
     features = features_reduced.copy()
 
-    print(f"\nUpdated feature list ({len(feature_cols)} features):")
-    for i, col in enumerate(feature_cols, 1):
-        print(f"  {i:2d}. {col}")
-    
     return feature_cols, features, features_reduced, removed_features
 
 # We apply VIF-based feature reduction
@@ -812,8 +804,7 @@ def verify_final_vif(features: pd.DataFrame) -> pd.DataFrame:
         print(f"  {row['feature']:30s}: {row['VIF']:7.2f} {flag}")
     
     if all_acceptable:
-        print(f"\n SUCCESS: All features have VIF <= 10.0")
-        print(f"  Multicollinearity has been successfully resolved!")
+        print(f"\n  All features have VIF <= 10.0")
     else:
         print(f"\n WARNING: Some features still have VIF > 10.0")
     
@@ -1030,21 +1021,6 @@ def analyze_pca_components(feature_cols: list, X_scaled: np.ndarray,variance_thr
     print(f"\n  Top 10 most contributing original features to {n_components_optimal} retained PCs:")
     for idx, row in importance_df.head(10).iterrows():
         print(f"    {row['feature']:30s}: {row['importance_pct']:5.1f}%")
-    
-    # We display the top features for first 3 PCs
-    print(f"\nTop features for first 3 principal components:")
-    for pc_idx in range(min(3, pca_full.n_components_)):
-        loadings = pca_full.components_[pc_idx]
-        variance = pca_full.explained_variance_ratio_[pc_idx] * 100
-        
-        # Get top 5 most important features ([::-1] is used to revese the order for descending instead of ascending)
-        top_indices = np.argsort(np.abs(loadings))[-5:][::-1]
-        
-        print(f"\nPC{pc_idx+1} ({variance:.1f}% variance):")
-        for idx in top_indices:
-            feat_name = feature_cols[idx]
-            loading = loadings[idx]
-            print(f"  {feat_name:30s}: {loading:+.3f}")
 
     return n_components_optimal, importance_df
 
@@ -1055,27 +1031,25 @@ def analyze_pca_components(feature_cols: list, X_scaled: np.ndarray,variance_thr
 # TRANSFORM TO OPTIMAL PC SPACE FOR CLUSTERING
 # ====================
 
-def dimensionality_reduction_2d(n_components_optimal: int, X_scaled: np.ndarray, umap_available: bool) -> np.ndarray:
+
+def dimensionality_reduction_2d(X_pca: np.ndarray, X_scaled: np.ndarray, umap_available: bool, result_df: pd.DataFrame) -> np.ndarray:
     """
     This function reduces the PC space to 2D for visualization using UMAP if available, otherwise PCA.
 
     Parameters:
-    n_components_optimal (int): Optimal number of components to retain.
+    X_pca (np.ndarray): Numpy array with optimal PC space.
     X_scaled (np.ndarray): Numpy array with scaled features.
+    umap_available (bool): Whether UMAP is available for use.
+    result_df (pd.DataFrame): Dataframe to store embedding coordinates.
 
     Returns:
     embedding(np.ndarray): Numpy array with 2D projection of the data.
-    reducer_name(str): Name of the dimensionality reduction method used.
     """
-    pca_optimal = PCA(n_components=n_components_optimal, random_state=42)
-    X_pca = pca_optimal.fit_transform(X_scaled)
-
     if umap_available:
         # We apply UMAP to the PC space (not original features)
         # We chose the number of neighbors as the square roolt of the number of samples (roughly 35 for 1338 samples)
         reducer = umap.UMAP(n_components=2, min_dist=0.1, n_neighbors=35, random_state=42)
         embedding = reducer.fit_transform(X_pca)  # We project the PC space to 2D
-        reducer_name = "UMAP"
         print(f"\nUsing UMAP to project {X_pca.shape[1]}D PC space → 2D for visualization")
     else:
         # We use first 2 PCs for visualization if UMAP is unavailable
@@ -1085,28 +1059,43 @@ def dimensionality_reduction_2d(n_components_optimal: int, X_scaled: np.ndarray,
         print(f"\nUsing first 2 PCs for 2D visualization (UMAP not available)")
 
     print(f"  Note: 2D projection is for visualization only, clustering uses {X_pca.shape[1]}D PC space")
+    
+    # We add embedding coordinates to features dataframe for plotting later
+    result_df["embed_x"] = embedding[:, 0]
+    result_df["embed_y"] = embedding[:, 1]
 
-    return X_pca, embedding, reducer_name
+    return embedding
 
-# # X_pca, embedding, reducer_name = dimensionality_reduction_2d(n_components_optimal, X_scaled, umap_available)
+# # X_pca, embedding = dimensionality_reduction_2d(n_components_optimal, X_scaled, umap_available)
 
 # ====================
 # KMEANS EVALUATION - Find best k
 # ====================
 
 
-def compute_optimal_k(X_pca: np.ndarray, features: pd.DataFrame) -> int:
+def compute_optimal_k(features: pd.DataFrame, X_scaled: np.ndarray, n_components_optimal: int, n_bootstrap: int = 100) -> int:
     """
-    This function evaluates KMeans clustering for multiple k values and computes silhouette scores and cluster balance.
+    This function evaluates KMeans clustering for multiple k values using bootstrap validation for stability assessment.
 
     Parameters:
-    X_pca (np.ndarray): Numpy array with data in PC space.
     features (pd.DataFrame): Dataframe with features.
+    X_scaled (np.ndarray): Numpy array with scaled features.
+    n_components_optimal (int): Optimal number of components to retain.
+    n_bootstrap (int): Number of bootstrap samples for stability validation (default: 50).
 
     Returns:
-    best_k(int): Optimal number of clusters based on silhouette score and cluster balance."""
+    best_k(int): Optimal number of clusters based on silhouette score, cluster balance, and bootstrap stability.
+    """
+    pca_optimal = PCA(n_components=n_components_optimal, random_state=42)
+    X_pca = pca_optimal.fit_transform(X_scaled)
+
     kmeans_results = []
-    for k in [2, 3, 4, 5, 7, 10, 12, 15]:
+    print(f"\nEvaluating k values with {n_bootstrap} bootstrap samples per k...")
+    
+    for k in [2, 3, 4, 5, 6, 7, 8, 9, 10]:
+        print(f"\n  Testing k={k}...")
+        
+        # We run clustering on full dataset
         km = KMeans(n_clusters=k, n_init=20, random_state=42)
         labels = km.fit_predict(X_pca)  # We cluster on the PC space
         
@@ -1118,46 +1107,104 @@ def compute_optimal_k(X_pca: np.ndarray, features: pd.DataFrame) -> int:
         min_size = counts.min()
         balance_ratio = min_size / max_size
         
+        # We perform bootstrap stability validation
+        ari_scores = []
+        for i in range(n_bootstrap):
+            # We sample 80% of data
+            sample_idx = np.random.choice(len(X_pca), size=int(0.8 * len(X_pca)), replace=False)
+            X_sample = X_pca[sample_idx]
+            
+            # We run KMeans on bootstrap sample
+            km_boot = KMeans(n_clusters=k, n_init=20, random_state=i)
+            labels_boot = km_boot.fit_predict(X_sample)
+            
+            # We compute ARI between bootstrap sample and full clustering
+            ari = adjusted_rand_score(labels[sample_idx], labels_boot)
+            ari_scores.append(ari)
+        
+        # We compute bootstrap statistics
+        ari_mean = np.mean(ari_scores)
+        ari_std = np.std(ari_scores)
+        ari_ci_lower = np.percentile(ari_scores, 2.5)
+        ari_ci_upper = np.percentile(ari_scores, 97.5)
+        
         kmeans_results.append({
             'k': k,
             'silhouette': silhouette,
             'balance_ratio': balance_ratio,
             'min_size': min_size,
             'max_size': max_size,
-            'labels': labels
+            'labels': labels,
+            'ari_mean': ari_mean,
+            'ari_std': ari_std,
+            'ari_ci_lower': ari_ci_lower,
+            'ari_ci_upper': ari_ci_upper
         })
         
-        print(f"  k={k}: silhouette={silhouette:.3f}, balance={balance_ratio:.3f}, "
-            f"sizes=[{min_size}–{max_size}]")
+        print(f"    Silhouette: {silhouette:.3f}, Balance: {balance_ratio:.3f}, "
+              f"Stability (ARI): {ari_mean:.3f} ± {ari_std:.3f}")
         
-    # We select best k based on balance AND the silhouette
-    # Note: we prioretize balanced clusters (ratio > 0.1) over perfect silhouette
+    # We select best k based on balance, silhouette, AND stability
     print("\nSelecting best KMeans configuration...")
+    
     valid_results = [r for r in kmeans_results if r['balance_ratio'] > 0.05 and r['min_size'] >= 0.05 * len(features)]
 
     if valid_results:
-        # Among balanced options, we pick the highest silhouette
-        best_kmeans = max(valid_results, key=lambda x: x['silhouette'])
+        # Among balanced options, we pick based on combined score:
+        # We normalize metrics to [0, 1] and compute weighted average
+        sil_scores = [r['silhouette'] for r in valid_results]
+        ari_scores = [r['ari_mean'] for r in valid_results]
+        
+        sil_min, sil_max = min(sil_scores), max(sil_scores)
+        ari_min, ari_max = min(ari_scores), max(ari_scores)
+        
+        for r in valid_results:
+            # We normalize scores (avoid division by zero)
+            sil_norm = (r['silhouette'] - sil_min) / (sil_max - sil_min) if sil_max > sil_min else 0.5
+            ari_norm = (r['ari_mean'] - ari_min) / (ari_max - ari_min) if ari_max > ari_min else 0.5
+            
+            # Combined score: 40% silhouette (separation) + 60% stability (reproducibility)
+            r['combined_score'] = 0.4 * sil_norm + 0.6 * ari_norm
+        
+        best_kmeans = max(valid_results, key=lambda x: x['combined_score'])
+        print(f"  Selection criterion: 40% silhouette + 60% bootstrap stability")
     else:
         # We use a relaxed threshold: at least 2% of data is in smallest cluster
         relaxed_results = [r for r in kmeans_results if r['min_size'] >= 0.02 * len(features)]
         if relaxed_results:
-            best_kmeans = max(relaxed_results, key=lambda x: x['silhouette'])
+            # We use same combined score approach
+            sil_scores = [r['silhouette'] for r in relaxed_results]
+            ari_scores = [r['ari_mean'] for r in relaxed_results]
+            
+            sil_min, sil_max = min(sil_scores), max(sil_scores)
+            ari_min, ari_max = min(ari_scores), max(ari_scores)
+            
+            for r in relaxed_results:
+                sil_norm = (r['silhouette'] - sil_min) / (sil_max - sil_min) if sil_max > sil_min else 0.5
+                ari_norm = (r['ari_mean'] - ari_min) / (ari_max - ari_min) if ari_max > ari_min else 0.5
+                r['combined_score'] = 0.4 * sil_norm + 0.6 * ari_norm
+            
+            best_kmeans = max(relaxed_results, key=lambda x: x['combined_score'])
+            print(f"  Using relaxed balance threshold (min cluster >= 2%)")
         else:
-            # We pick the best balance
+            # We pick best balance as fallback
             best_kmeans = max(kmeans_results, key=lambda x: x['balance_ratio'])
+            print(f"  WARNING: Using best balance only (all k values have poor balance)")
 
     best_k = best_kmeans['k']
-    print(f"  Selected: k={best_k} (silhouette={best_kmeans['silhouette']:.3f}, "
-        f"balance={best_kmeans['balance_ratio']:.3f})")
+    print(f"\n  Selected: k={best_k}")
+    print(f"    Silhouette: {best_kmeans['silhouette']:.3f}")
+    print(f"    Balance: {best_kmeans['balance_ratio']:.3f}")
+    print(f"    Stability (ARI): {best_kmeans['ari_mean']:.3f} ± {best_kmeans['ari_std']:.3f}")
+    print(f"    95% CI: [{best_kmeans['ari_ci_lower']:.3f}, {best_kmeans['ari_ci_upper']:.3f}]")
+    print(f"    Interpretation: {'STABLE' if best_kmeans['ari_mean'] > 0.7 else 'MODERATE' if best_kmeans['ari_mean'] > 0.5 else 'UNSTABLE'}")
     
     # We use KMeans clustering results
     cluster_labels = best_kmeans['labels']
-    cluster_method = f"KMeans (k={best_kmeans['k']}, silhouette={best_kmeans['silhouette']:.3f})"
+    cluster_method = f"KMeans (k={best_kmeans['k']}, silhouette={best_kmeans['silhouette']:.3f}, stability={best_kmeans['ari_mean']:.3f})"
     best_k = best_kmeans['k']
-    print(f"\nUsing KMeans clustering on {X_pca.shape[1]}D PC space")
 
-    return cluster_labels, cluster_method, best_k, best_kmeans
+    return X_pca, cluster_labels, cluster_method, best_k, best_kmeans
 
 # # cluster_labels, cluster_method, best_k, best_kmeans = compute_optimal_k(X_pca, features)
 
@@ -1337,7 +1384,7 @@ def silhouette_comparison(X_pca: np.ndarray, X_scaled: np.ndarray, cluster_label
 # RESULTS ASSEMBLY
 # ====================
 
-def assemble_results_dataframe(features: pd.DataFrame, feature_cols: list,cluster_labels: np.ndarray, embedding: np.ndarray, temporal_features: pd.DataFrame, reducer_name: str, cluster_method: str, X_pca: np.ndarray) -> pd.DataFrame:
+def assemble_results_dataframe(features: pd.DataFrame, feature_cols: list,cluster_labels: np.ndarray, temporal_features: pd.DataFrame, reducer_name: str, cluster_method: str, X_pca: np.ndarray) -> pd.DataFrame:
     """
     This function assembles the final results dataframe with cluster assignments and 2D embeddings.
     
@@ -1345,7 +1392,6 @@ def assemble_results_dataframe(features: pd.DataFrame, feature_cols: list,cluste
     features (pd.DataFrame): Dataframe with features.
     feature_cols (list): List of feature column names.
     cluster_labels (np.ndarray): Cluster assignments.
-    embedding (np.ndarray): 2D embedding of the data.
     temporal_features (pd.DataFrame): Original temporal features dataframe.
     
     Returns:
@@ -1354,8 +1400,8 @@ def assemble_results_dataframe(features: pd.DataFrame, feature_cols: list,cluste
     """
     result_df = features.copy()
     result_df["cluster"] = cluster_labels
-    result_df["embed_x"] = embedding[:, 0]
-    result_df["embed_y"] = embedding[:, 1]
+    # result_df["embed_x"] = embedding[:, 0]
+    # result_df["embed_y"] = embedding[:, 1]
 
     # We add back original (non-transformed) features for interpretation
     raw_feature_cols = [
@@ -1747,7 +1793,7 @@ def plot_cluster_results(result_df: pd.DataFrame, reducer_name: str, feature_col
 
 # # plot_cluster_results(result_df, reducer_name, feature_cols, cluster_labels, X_scaled, n_components_optimal)
 
-def plot_variance_explained(X_scaled: np.ndarray, feature_cols: list, n_components_optimal: int):
+def print_variance_explained(X_scaled: np.ndarray, feature_cols: list, n_components_optimal: int):
     """
     This function plots the variance explained by each principal component and identifies top features.
     Parameters:
