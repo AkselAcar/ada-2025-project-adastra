@@ -1,4 +1,4 @@
-# ADA CS-(402) COURSE PROJECT P2 - Team ADAstra
+# ADA CS-(402) COURSE PROJECT - Team ADAstra
 # Epidemiology of Toxicity on Reddit Hyperlink Network
 
 **Team Members: Aksel Acar, Emilien Coudurier, Nathan Tabet, Cyprien Tordo, Cedric Zanou**
@@ -21,7 +21,7 @@ Among others, we aim to address the following research questions:
 ### How does toxicity propagate across the Reddit network?
 - Do distinct propagation patterns appear between source and target subreddits?
 - How do interaction frequency, regularity, and network position affect spread?
-- How do interaction frequency, regularity, and network position affect spread?
+- Can we identify clusters of communities with similar toxic dynamics?
 ### What temporal patterns characterize toxic behavior?
 - Are there identifiable lifecycles for toxic events (onset, escalation, decay)?
 - Do subreddits exhibit chronic versus burst-driven toxicity patterns?
@@ -40,7 +40,7 @@ We performed the following preprocessing steps in order to prepare our data for 
 
 
 ### 1. Toxicity Metric Definition and Computation
-A core challenge of our project is to define a metric that captures *toxicity* of a subreddit post. By combining a qualitative choice of properties defining toxicity with a constraint to focus on negative-sentiment posts, we constructed a composite TOXICITY_METRIC metric as a weighted average of multiple linguistic and sentiment features available in the data such as FRACTION_OF_DIGITS, LIWC_Swear or LIWC_Negemo. Weights are optimized through exploratory analysis to maximize discriminative power between clearly toxic and non-toxic interactions. Passing a threshold on this scoring, we also derive a binary classification TOXICITY_CAT, allowing to distinguish between non-toxic and toxic posts.
+A core challenge of our project is to define a metric that captures *toxicity* of a subreddit post. By combining a qualitative choice of properties defining toxicity with a constraint to focus on negative-sentiment posts, we constructed a composite `TOXICITY_METRIC` metric as a weighted average of multiple linguistic and sentiment features available in the data such as FRACTION_OF_DIGITS, LIWC_Swear or LIWC_Negemo. Weights are optimized through exploratory analysis to maximize discriminative power between clearly toxic and non-toxic interactions. Passing a threshold on this scoring, we also derive a binary classification `TOXICITY_CAT`, allowing to distinguish between non-toxic and toxic posts.
  
 ### 2. Hyperlink Network Mapping
 
