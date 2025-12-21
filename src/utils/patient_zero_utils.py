@@ -888,6 +888,7 @@ def plot_pcmci_interactive_html(edges, var_names, case_study_id_py, identifier='
         hovermode='closest',
         height=600,
         autosize=True,
+        margin=dict(t=40, b=20, l=20, r=20),
         #width=900,
     )
 
