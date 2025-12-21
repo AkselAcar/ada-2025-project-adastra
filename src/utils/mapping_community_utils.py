@@ -688,8 +688,8 @@ def assign_clusters_embeddings(embeddings_2d):
 
     # Add cluster descriptive labels
     cluster_labels = {
-        "0": "Moderate-volume Victim-leaning - Mixed",
-        "1": "Moderate-volume Aggressor - Mixed",
+        "0": "Moderate-volume Aggressor - Mixed",
+        "1": "Moderate-volume Victim-leaning - Mixed",
         "2": "High-volume Balanced (Hub) - Bursty",
         "3": "Low-volume Victim - Mixed",
         "-1": "Unassigned (not toxic)"
