@@ -24,9 +24,9 @@ THRESHOLDS = [80, 80, 80]
 TIME_SERIES_FREQUENCIES = ["12h", "6h", "D"]
 MOVING_AVERAGE_WINDOWS = [5, 2, 3]
 TOP_INTERACTORS_TO_PLOT = [8, 10, 10]
-MAX_LAGS = [5, 2, 3]
+MAX_LAGS = [6, 4, 6]
 ALPHAS = [0.05, 0.05, 0.05]
-NB_SUBREDDITS_TO_FOCUS_PCMCI = [8, 10, 10]
+NB_SUBREDDITS_TO_FOCUS_PCMCI = [10, 10, 10]
 
 def extract_focused_df(df, keyword="", time_window=None):
     """
@@ -591,7 +591,7 @@ def construct_time_series_df(df, subreddit_names, time_window=None, bin_freq="D"
     return time_series_df
 
 
-def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False, case_study_id_py=0):
+def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False, identifier='(Non-Toxic on Toxic)', case_study_id_py=0):
     """
     Function performing PCMCI causal discovery on the given time series dataframe using tigramite library. 
     Returns the p-value matrix, effect value matrix and list of significant edges discovered.
@@ -613,7 +613,7 @@ def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False, case_study_
     # PCMCI from tigramite
     parcorr = RobustParCorr(significance='analytic') # CI type: partial correlation test
     pcmci = PCMCI(dataframe=tdata, cond_ind_test=parcorr)
-    results = pcmci.run_pcmci(tau_max=max_lag, pc_alpha=None)  # pc_alpha=None => we will control significance manually
+    results = pcmci.run_pcmci(tau_max=max_lag, pc_alpha=None)
 
     # Extracting results
     p_matrix = results['p_matrix']     # (p-values) N_vars x N_vars x max_lag+1
@@ -726,14 +726,14 @@ def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False, case_study_
             font_size=8
         )
 
-        plt.title("PCMCI causal graph (lagged effects)")
+        plt.title(f"PCMCI causal graph {identifier}")
         plt.axis("off")
         plt.show()
 
     return p_matrix, val_matrix, edges
 
 
-def plot_pcmci_interactive_html(edges, var_names, case_study_id_py, output_html="pcmci.html"):
+def plot_pcmci_interactive_html(edges, var_names, case_study_id_py, identifier='(Non-Toxic on Toxic)', output_html="pcmci.html"):
     """
     Interactive PCMCI graph with lag slider.
     Nodes stay fixed, edges accumulate as lag increases.
@@ -880,19 +880,26 @@ def plot_pcmci_interactive_html(edges, var_names, case_study_id_py, output_html=
     fig = go.Figure(data=all_traces)
 
     fig.update_layout(
-        title="PCMCI Causal Graph (Interactive by Lag)",
+        title=f"PCMCI Causal Graph {identifier}",
         showlegend=False,
         sliders=sliders,
         xaxis=dict(showgrid=False, zeroline=False, visible=False),
         yaxis=dict(showgrid=False, zeroline=False, visible=False),
         hovermode='closest',
-        height=800,
+        height=600,
         autosize=True,
         #width=900,
     )
 
-    fig.show()
-    fig.write_html(output_html)
+    config = {
+        'scrollZoom': False,
+        'displayModeBar': True,
+        'displaylogo': False,
+        'modeBarButtonsToRemove': ['lasso2d', 'select2d']
+    }
+    
+    fig.show(config=config)
+    fig.write_html(output_html, config=config)
 
 def average_toxicity_traits(df, groupby_col='SOURCE_SUBREDDIT'):
     """
@@ -1001,11 +1008,11 @@ def run_init_toxic_event_assessment(interactions_df, case_study_id):
     # Extract focused subreddits
     interacting_subreddits = pd.unique(focused_df[['SOURCE_SUBREDDIT', 'TARGET_SUBREDDIT']].values.ravel()).tolist()
     if case_study_id_py == 0:
-        neighboring_subreddits = pd.read_csv("Data/cluster0_network_target")["subreddit"].tolist()
+        neighboring_subreddits = pd.read_csv("Data/CS_networks/network_target_cluster0")["subreddit"].tolist()
     elif case_study_id_py == 1:
-        neighboring_subreddits = pd.read_csv("Data/cluster1_network_source")["subreddit"].tolist()
+        neighboring_subreddits = pd.read_csv("Data/CS_networks/network_source_cluster1")["subreddit"].tolist()
     elif case_study_id_py == 2:
-        neighboring_subreddits = pd.read_csv("Data/cluster2_network_source")["subreddit"].tolist() + pd.read_csv("Data/cluster2_network_target")["subreddit"].tolist()
+        neighboring_subreddits = pd.read_csv("Data/CS_networks/network_source_cluster2")["subreddit"].tolist() + pd.read_csv("Data/CS_networks/network_target_cluster2")["subreddit"].tolist()
     else:
         print("Error: Case study ID not recognized for neighboring subreddits.")
         neighboring_subreddits = []
@@ -1142,9 +1149,9 @@ def run_pcmci_analysis(daily_neg_interaction_df, focused_subreddits, sr_interact
     finer_focused_subreddits = list(sr_interaction_count_df.sort_values(by="TOTAL_INTERACTIONS", ascending=False).head(NB_SUBREDDITS_TO_FOCUS)["SUBREDDIT"])
 
     time_series_neg_df = construct_time_series_df(interactions_df[interactions_df["TOXICITY_CAT"] == 1], subreddit_names=finer_focused_subreddits, time_window=TIME_WINDOW)
-    time_series_df = construct_time_series_df(interactions_df, subreddit_names=finer_focused_subreddits, time_window=TIME_WINDOW)
+    time_series_df = construct_time_series_df(interactions_df[interactions_df["TOXICITY_CAT"] == 0], subreddit_names=finer_focused_subreddits, time_window=TIME_WINDOW)
 
-    p_matrix, val_matrix, edges = compute_PCMCI(time_series_df, max_lag=MAX_LAG, alpha=ALPHA, show=True, case_study_id_py=case_study_id_py)
-    p_matrix_neg, val_matrix_neg, edges_neg = compute_PCMCI(time_series_neg_df, max_lag=MAX_LAG, alpha=ALPHA, show=True, case_study_id_py=case_study_id_py)
+    p_matrix, val_matrix, edges = compute_PCMCI(time_series_df, max_lag=MAX_LAG, alpha=ALPHA, show=False, case_study_id_py=case_study_id_py)
+    p_matrix_neg, val_matrix_neg, edges_neg = compute_PCMCI(time_series_neg_df, max_lag=MAX_LAG, alpha=ALPHA, show=False, identifier='(Toxic on Toxic)', case_study_id_py=case_study_id_py)
 
     return edges, edges_neg, finer_focused_subreddits
