@@ -59,7 +59,7 @@ We first build a **feature space** tailored to propagation-style behavior. For e
 
 To obtain reliable clusters, we apply a preprocessing pipeline: we filter out very low-activity subreddits, reduce redundant features (VIF), normalize skewed distributions (log transform and winsorization), detect and flag mega-subreddits on raw counts, and finally standardize all features so they contribute comparably.
 
-We then use **Principal Component Analysis (PCA)** to compress this cleaned feature set into a smaller number of principal components that retain most of the variance, giving each subreddit a compact “behavioral fingerprint”.
+We then use **Principal Component Analysis (PCA)** to compress this cleaned feature set into a smaller number of components that retain most of the variance.
 
 On this reduced space, we run **K-Means clustering** and select the number of clusters using internal quality metrics (silhouette score, cluster size balance), stability checks (bootstrap-based Adjusted Rand Index), and standard indices (e.g., Davies–Bouldin, Calinski–Harabasz, Kruskal–Wallis tests). This yields a set of robust, reproducible clusters that summarize the main **propagation styles of toxicity** across Reddit.
 
