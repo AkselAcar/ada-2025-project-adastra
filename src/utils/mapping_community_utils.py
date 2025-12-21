@@ -385,7 +385,7 @@ def subreddit_selector(embeddings_2d):
         return "Select points with lasso/box tool, then click Export"
 
     # Run the app when called
-    app.run(debug=True, port=8050)
+    app.run(debug=True, port=8051)
 
 def assign_topic(embeddings_df, csv_file, topic_name):
     """
