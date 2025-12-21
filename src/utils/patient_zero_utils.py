@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.dates as mdates
 import networkx as nx
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import copy
 from datetime import date
 from tigramite.data_processing import DataFrame as TDataFrame
@@ -10,6 +11,22 @@ from tigramite.independence_tests.robust_parcorr import RobustParCorr
 from tigramite.pcmci import PCMCI
 
 MAX_TIME_WINDOW = pd.to_datetime([date(2013, 12, 31), date(2017, 4, 30)]).date
+
+# Case Studies Variables
+CASE_STUDY_NAMES = ["bettersubredditdrama", "science", "drama"]
+KEYWORDS = ["bettersubredditdrama", "science", "drama"]
+TIME_WINDOWS = [
+    [date(2015, 11, 10), date(2015, 12, 25)], 
+    [date(2015, 4, 15), date(2015, 5, 5)], 
+    [date(2015, 11, 1), date(2016, 1, 1)]
+]
+THRESHOLDS = [80, 80, 80]
+TIME_SERIES_FREQUENCIES = ["12h", "6h", "D"]
+MOVING_AVERAGE_WINDOWS = [5, 2, 3]
+TOP_INTERACTORS_TO_PLOT = [8, 10, 10]
+MAX_LAGS = [5, 2, 3]
+ALPHAS = [0.05, 0.05, 0.05]
+NB_SUBREDDITS_TO_FOCUS_PCMCI = [8, 10, 10]
 
 def extract_focused_df(df, keyword="", time_window=None):
     """
@@ -129,7 +146,7 @@ def construct_daily_interaction_df(df, keyword="", time_window=None, bin_freq="D
         df[df["SOURCE_SUBREDDIT"].str.contains(keyword, case=False, na=False)]
         .groupby(time_bins)
         .size()
-        .rename("DAILY_SOURCE_INTERACTIONS")
+        .rename("DAILY_TOTAL_SOURCE_INTERACTIONS")
     )
 
     # Count the number of target interactions per time bin
@@ -137,7 +154,7 @@ def construct_daily_interaction_df(df, keyword="", time_window=None, bin_freq="D
         df[df["TARGET_SUBREDDIT"].str.contains(keyword, case=False, na=False)]
         .groupby(time_bins)
         .size()
-        .rename("DAILY_TARGET_INTERACTIONS")
+        .rename("DAILY_TOTAL_TARGET_INTERACTIONS")
     )
 
     # Create the full time range with chosen frequency
@@ -159,8 +176,8 @@ def construct_daily_interaction_df(df, keyword="", time_window=None, bin_freq="D
 
     # Add total column
     daily_interactions["DAILY_TOTAL_INTERACTIONS"] = (
-        daily_interactions["DAILY_SOURCE_INTERACTIONS"] +
-        daily_interactions["DAILY_TARGET_INTERACTIONS"]
+        daily_interactions["DAILY_TOTAL_SOURCE_INTERACTIONS"] +
+        daily_interactions["DAILY_TOTAL_TARGET_INTERACTIONS"]
     )
 
     # Ensure datetime index
@@ -168,7 +185,6 @@ def construct_daily_interaction_df(df, keyword="", time_window=None, bin_freq="D
     daily_interactions.index.name = "TIME"
 
     return daily_interactions
-
 
 
 def construct_neg_interaction_df(
@@ -295,90 +311,222 @@ def smart_df_add(df1, df2):
     return added_df
 
 
-def plot_daily_interactions(dataframe, bin_freq="D", bin_interval=None,
-                            specifier="", threshold=None):
-
-    fig, ax = plt.subplots(figsize=(10, 4))
-
+def plot_daily_interactions(dataframe, bin_freq="D",
+                            specifier="", threshold=None, moving_avg_window=None,
+                            html_filename="CS9_daily_interactions.html"):
+    """
+    Plot daily interactions using Plotly with filled areas under curves.
+    
+    :param dataframe: DataFrame with datetime index and interaction columns
+    :param bin_freq: Frequency for binning (e.g., "D" for day, "H" for hour)
+    :param bin_interval: Interval for tick marks
+    :param specifier: Label specifier (e.g., "Reddit", "Twitter")
+    :param threshold: Optional threshold value (as percentage of max)
+    :param moving_avg_window: Optional window size for moving average
+    :param html_filename: Output HTML filename
+    """
+    
     dataframe = dataframe.copy()
-
-    # 🔑 THE REAL FIX
+    
+    # Convert index to timestamp if needed
     if isinstance(dataframe.index, pd.PeriodIndex):
         dataframe.index = dataframe.index.to_timestamp()
-
+    
     dataframe.index = pd.to_datetime(dataframe.index)
-
-    dataframe.plot(ax=ax)
-
-    # Locator
-    if bin_interval is not None:
-        if "h" in bin_freq.lower():
-            ax.xaxis.set_major_locator(mdates.HourLocator(interval=bin_interval))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
-            ax.set_xlabel("Time")
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Sort columns by their maximum values (descending) to layer properly
+    col_max_values = [(col, dataframe[col].max()) for col in dataframe.columns]
+    col_max_values.sort(key=lambda x: x[1], reverse=True)
+    sorted_cols = [col for col, _ in col_max_values]
+    
+    # Add traces for each column (largest first, so smallest appears on top)
+    for col in sorted_cols:
+        fig.add_trace(go.Scatter(
+            x=dataframe.index,
+            y=dataframe[col],
+            mode='lines',
+            name=col,
+            fill='tozeroy',
+            line=dict(width=2),
+            hovertemplate='<b>%{fullData.name}</b><br>Date: %{x}<br>Count: %{y}<extra></extra>'
+        ))
+    
+    # Add moving average if specified
+    if moving_avg_window is not None:
+        if bin_freq == 'D':
+            temp = str(moving_avg_window) + '-day'
         else:
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=bin_interval))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-            ax.set_xlabel("Day")
+            temp = int(bin_freq[:-1]) * moving_avg_window
+            temp = str(temp) + 'h'
 
-    # Threshold
+        # Calculate total interactions across all columns
+        total_interactions = dataframe.sum(axis=1)
+        moving_avg = total_interactions.rolling(window=moving_avg_window, center=True).mean()
+        
+        fig.add_trace(go.Scatter(
+            x=dataframe.index,
+            y=moving_avg,
+            mode='lines',
+            name=f'{temp} Moving Average',
+            line=dict(color='red', width=2),
+            hovertemplate='<b>%{fullData.name}</b><br>Date: %{x}<br>Count: %{y:.1f}<extra></extra>'
+        ))
+    
+    # Add threshold line if specified
     if threshold is not None:
-        ax.axhline(
-            y=threshold / 100 * dataframe.max().max(),
-            color="r",
-            linestyle="--",
-            label="Threshold"
-        )
+        threshold_value = threshold / 100 * dataframe.max().max()
+        fig.add_trace(go.Scatter(
+            x=dataframe.index,
+            y=[threshold_value] * len(dataframe),
+            mode='lines',
+            name=f'{threshold}% of max value',
+            line=dict(color='red', dash='dash', width=2),
+            hoverinfo='skip'
+        ))
+    
+    # Update layout
+    x_label = "Time" if "h" in bin_freq.lower() else "Day"
 
-    ax.tick_params(axis="x", rotation=45)
-    ax.grid(axis="y", linestyle="--", alpha=0.6)
-    ax.set_title(f"{specifier} Interactions over time")
-    ax.set_ylabel(f"Number of {specifier} Interactions")
-
-    plt.tight_layout()
-    plt.show()
-
+    current_case_study = html_filename[15]
+    
+    fig.update_layout(
+        title=f"Total {specifier} Interactions over time (Case Study {current_case_study}: '{CASE_STUDY_NAMES[int(current_case_study)-1]}')",
+        xaxis_title=x_label,
+        yaxis_title=f"Number of {specifier} Interactions",
+        hovermode='x unified',
+        template='plotly_white',
+        showlegend=True,
+        legend=dict(
+            x=0.01,
+            y=0.99,
+            xanchor='left',
+            yanchor='top',
+            bgcolor='rgba(255, 255, 255, 0.8)',
+            bordercolor='lightgray',
+            borderwidth=1
+        ),
+        xaxis=dict(
+            showgrid=False,
+            tickangle=45
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor='lightgray',
+            griddash='dash'
+        ),
+        height=400,
+        autosize=True,
+    )
+    
+    config = {
+        'scrollZoom': False,
+        'displayModeBar': True,
+        'displaylogo': False,
+        'modeBarButtonsToRemove': ['lasso2d', 'select2d']
+    }
+    
+    fig.show(config=config)
+    fig.write_html(html_filename, config=config)
 
 
 def plot_top_interactors(interaction_count_df,
                          x_col, y_cols,
                          legend,
                          x_ticklabels,
-                         plot_top = 10):
+                         plot_top=10,
+                         y_axis_scale='linear',
+                         html_filename="top_interactors.html"):
+    """
+    Plot top interactors using Plotly.
     
-    fig, ax = plt.subplots(figsize=(8, 5))
-
-    if(x_col == None):
-        interaction_count_df.head(plot_top).plot(
-            y=y_cols,
-            kind="bar",
-            width=0.8,
-            ax=ax
-        )
+    :param interaction_count_df: DataFrame with interaction counts
+    :param x_col: Column name for x-axis (or None to use index)
+    :param y_cols: List of column names for y-axis (bar groups)
+    :param legend: List of legend labels
+    :param x_ticklabels: List of labels for x-axis ticks
+    :param plot_top: Number of top items to plot
+    """
+    
+    # Get top N rows
+    df_top = interaction_count_df.head(plot_top)
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Determine x values - use provided labels or extract from data
+    if x_ticklabels is not None:
+        x_labels = list(x_ticklabels[:len(df_top)])
+    elif x_col is None:
+        x_labels = list(df_top.index)
     else:
-        interaction_count_df.head(plot_top).plot(
-            x=x_col,
-            y=y_cols,
-            kind="bar",
-            width=0.8,
-            ax=ax
-        )
+        x_labels = list(df_top[x_col])
+    
+    # Convert y_cols to list if it's not already
+    y_cols_list = list(y_cols) if hasattr(y_cols, '__iter__') and not isinstance(y_cols, str) else [y_cols]
+    legend_list = list(legend) if hasattr(legend, '__iter__') and not isinstance(legend, str) else [legend]
+    
+    # Add bar traces for each y column
+    for i, col in enumerate(y_cols_list):
+        fig.add_trace(go.Bar(
+            x=x_labels,
+            y=df_top[col],
+            name=str(legend_list[i]) if i < len(legend_list) else str(col),
+            hovertemplate='<b>%{fullData.name}</b><br>%{x}<br>Count: %{y}<extra></extra>'
+        ))
+    
+    # Update layout
+    fig.update_layout(
+        title=f"Top {plot_top} Subreddits by Number of Interactions",
+        xaxis_title="Subreddit",
+        yaxis_title="Number of Interactions",
+        template='plotly_white',
+        showlegend=True,
+        legend=dict(
+            x=0.80,
+            y=0.99,
+            xanchor='left',
+            yanchor='top',
+            bgcolor='rgba(255, 255, 255, 0.8)',
+            bordercolor='lightgray',
+            borderwidth=1
+        ),
+        legend_title_text="Interaction Type",
+        xaxis=dict(
+            showgrid=False,
+            tickangle=45
+        ),
+        yaxis=dict(
+            showgrid=True,
+            type=y_axis_scale,
+            gridcolor='lightgray',
+            griddash='dash'
+        ),
+        barmode='stack',
+        height=400,
+        autosize=True,
+        #width=900,
+        margin=dict(t=40, b=20, l=10, r=10),
+    )
 
-    ax.set_title("Top " + str(plot_top) + " Subreddits by Number of Interactions", fontsize=14)
-    ax.set_xlabel("Subreddit", fontsize=12)
-    ax.set_ylabel("Number of Interactions", fontsize=12)
-    ax.set_xticklabels(x_ticklabels, rotation=45, ha="right")
-    ax.legend(legend, title="Interaction Type")
-    ax.grid(axis="y", linestyle="--", alpha=0.6)
-    plt.tight_layout()
-    plt.show()
+    config = {
+        'scrollZoom': False,
+        'displayModeBar': True,
+        'displaylogo': False,
+        'modeBarButtonsToRemove': ['lasso2d', 'select2d']
+    }
+    
+    fig.show(config=config)
+    fig.write_html(html_filename, config=config)
 
-def construct_time_series_df(event_ts, df, subreddit_names, time_window=None, bin_freq="D"):
+
+def construct_time_series_df(df, subreddit_names, time_window=None, bin_freq="D"):
     """
     Constructs a time series dataframe of interactions for given subreddits.
     Each value corresponds to the number of interactions within a time bin.
 
-    :param event_ts: event time series
     :param df: interactions dataframe
     :param subreddit_names: list of subreddit names
     :param time_window: time window [start, end]
@@ -439,12 +587,11 @@ def construct_time_series_df(event_ts, df, subreddit_names, time_window=None, bi
     )
 
     time_series_df.index.name = "TIME"
-    time_series_df = pd.concat([time_series_df, event_ts], axis=1, join="inner")
 
     return time_series_df
 
 
-def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False):
+def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False, case_study_id_py=0):
     """
     Function performing PCMCI causal discovery on the given time series dataframe using tigramite library. 
     Returns the p-value matrix, effect value matrix and list of significant edges discovered.
@@ -458,24 +605,20 @@ def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False):
     :return: p_matrix (N x N x max_lag+1), val_matrix (N x N x max_lag+1), edges (list of dicts)
     """
 
-    print("Data transformation to tigramite format...")
     # Data transformation to tigramite format
     data_arr = time_series_df.values
     var_names = list(time_series_df.columns)
     tdata = TDataFrame(data_arr, var_names=var_names)
 
-    print("PCMCI from tigramite...")
     # PCMCI from tigramite
     parcorr = RobustParCorr(significance='analytic') # CI type: partial correlation test
     pcmci = PCMCI(dataframe=tdata, cond_ind_test=parcorr)
     results = pcmci.run_pcmci(tau_max=max_lag, pc_alpha=None)  # pc_alpha=None => we will control significance manually
 
-    print("Extracting results...")
     # Extracting results
     p_matrix = results['p_matrix']     # (p-values) N_vars x N_vars x max_lag+1
     val_matrix = results['val_matrix'] # (effect values e.g. partial correlations) N_vars x N_vars x max_lag+1
 
-    print("Extracting significant links...")
     # Extracting significant links based on provided alpha
     edges = []
     N = len(var_names)
@@ -499,11 +642,6 @@ def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False):
         G = nx.DiGraph()
         G.add_nodes_from(var_names)
 
-        # for layout clarity, you may want to only visualize a subset (e.g., protagonist and top-K parents)
-        # Optionally filter edges to those involving protagonist:
-        # protagonist = 'protagonist'  # replace
-        # edges = [e for e in edges if (e['source']==protagonist or e['target']==protagonist)]
-
         # Add edges with weight and label
         for e in edges:
             src, tgt, lag, eff = e['source'], e['target'], e['lag'], e['effect']
@@ -514,27 +652,32 @@ def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False):
                 G[src][tgt]['label'] = prev + ' | ' + lbl
                 G[src][tgt]['weight'] += abs(eff)
             else:
-                G.add_edge(src, tgt, label=lbl, weight=abs(eff))
+                G.add_edge(
+                    src, tgt,
+                    label=lbl,
+                    weight=abs(eff),
+                    effect=eff   # ← store signed effect
+                )
 
         # Plot (for readability limit nodes if huge)
-        plt.figure(figsize=(16, 12))
+        plt.figure(figsize=(12, 9))
 
         try:
             pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
         except:
             pos = nx.kamada_kawai_layout(G)
 
-        # --- Force EVENT node to the center ---
-        if "EVENT" in pos:
-            pos["EVENT"] = np.array([0.0, 0.0])
+        # --- Force PROTAGONIST node to the center ---
+        if KEYWORDS[case_study_id_py] in pos:
+            pos[KEYWORDS[case_study_id_py]] = np.array([0.0, 0.0])
 
         node_colors = [
-            "gold" if n == "EVENT" else "lightblue"
+            "gold" if n == KEYWORDS[case_study_id_py] else "lightblue"
             for n in G.nodes()
         ]
 
         node_sizes = [
-            1300 if n == "EVENT" else 900
+            1300 if n == KEYWORDS[case_study_id_py] else 900
             for n in G.nodes()
         ]
 
@@ -555,10 +698,16 @@ def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False):
 
         for u, v in G.edges():
             edge_widths.append(max(1.5, G[u][v]['weight'] * 3))
-            if u == "EVENT" or v == "EVENT":
-                edge_colors.append("crimson")   # edges involving EVENT
+
+            if u == KEYWORDS[case_study_id_py] or v == KEYWORDS[case_study_id_py]:
+                eff = G[u][v].get("effect", 0.0)
+                if eff > 0:
+                    edge_colors.append("crimson")  # amplifying
+                else:
+                    edge_colors.append("green")    # suppressing
             else:
                 edge_colors.append("gray")
+
 
         nx.draw_networkx_edges(
             G, pos,
@@ -582,3 +731,420 @@ def compute_PCMCI(time_series_df, max_lag=5, alpha=0.05, show=False):
         plt.show()
 
     return p_matrix, val_matrix, edges
+
+
+def plot_pcmci_interactive_html(edges, var_names, case_study_id_py, output_html="pcmci.html"):
+    """
+    Interactive PCMCI graph with lag slider.
+    Nodes stay fixed, edges accumulate as lag increases.
+
+    :param edges: list of edge dicts from compute_PCMCI
+    :param var_names: list of variable names
+    :param output_html: output HTML file
+    """
+
+    # --- Build graph ---
+    G = nx.DiGraph()
+    G.add_nodes_from(var_names)
+
+    for e in edges:
+        G.add_edge(
+            e["source"],
+            e["target"],
+            lag=e["lag"],
+            effect=e["effect"]
+        )
+
+    # --- Fixed layout ---
+    try:
+        pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
+    except:
+        pos = nx.kamada_kawai_layout(G)
+
+    if KEYWORDS[case_study_id_py] in pos:
+        pos[KEYWORDS[case_study_id_py]] = np.array([0.0, 0.0])
+
+    # --- Edge traces per lag (CREATE EDGES FIRST) ---
+    max_lag = max(e["lag"] for e in edges)
+    edge_traces_by_lag = {lag: [] for lag in range(1, max_lag + 1)}
+
+    for e in edges:
+        src, tgt = e["source"], e["target"]
+        x0, y0 = pos[src]
+        x1, y1 = pos[tgt]
+
+        color = (
+            "red" if (tgt == KEYWORDS[case_study_id_py] and e["effect"] > 0) or (src == KEYWORDS[case_study_id_py] and e["effect"] > 0)
+            else "green" if (tgt == KEYWORDS[case_study_id_py]) or (src == KEYWORDS[case_study_id_py])
+            else "gray"
+        )
+
+        # Create edge line
+        edge_trace = go.Scatter(
+            x=[x0, x1],
+            y=[y0, y1],
+            mode="lines",
+            line=dict(width=2, color=color),
+            hoverinfo="skip",  # Skip hover on the line itself
+            showlegend=False,
+            visible=(e["lag"] == 1)  # Only lag=1 visible initially
+        )
+        
+        # Create invisible marker at midpoint for hover
+        mid_x = (x0 + x1) / 2
+        mid_y = (y0 + y1) / 2
+        
+        # Set hover text color based on edge color
+        if color == "gray":
+            hover_text = f"<span style='color:white'><b>{src} → {tgt}</b><br>Lag: {e['lag']}<br>Correlation: {e['effect']:.4f}</span>"
+        else:
+            hover_text = f"<b>{src} → {tgt}</b><br>Lag: {e['lag']}<br>Correlation: {e['effect']:.4f}"
+        
+        hover_trace = go.Scatter(
+            x=[mid_x],
+            y=[mid_y],
+            mode="markers",
+            marker=dict(size=15, color=color, opacity=0.01),  # Nearly invisible
+            hoverinfo="text",
+            hovertext=hover_text,
+            showlegend=False,
+            visible=(e["lag"] == 1)  # Only lag=1 visible initially
+        )
+
+        edge_traces_by_lag[e["lag"]].extend([edge_trace, hover_trace])
+
+    # --- Node trace (CREATE NODES LAST so they appear on top) ---
+    node_x, node_y, node_text = [], [], []
+    node_hover = []
+    for n in G.nodes():
+        x, y = pos[n]
+        node_x.append(x)
+        node_y.append(y)
+        node_text.append(n)
+        node_hover.append(f"<b>{n}</b>")
+
+    node_trace = go.Scatter(
+        x=node_x, y=node_y,
+        mode="markers+text",
+        text=node_text,
+        textposition="bottom center",
+        marker=dict(
+            size=[30 if n == KEYWORDS[case_study_id_py] else 20 for n in G.nodes()],
+            color=["gold" if n == KEYWORDS[case_study_id_py] else "lightblue" for n in G.nodes()],
+            opacity=1.0,
+            line=dict(width=1, color="black")
+        ),
+        hoverinfo="text",
+        hovertext=node_hover,
+        showlegend=False
+    )
+
+    # --- Collect all traces (EDGES FIRST, THEN NODES) ---
+    all_traces = []
+    for lag in range(1, max_lag + 1):
+        all_traces.extend(edge_traces_by_lag[lag])
+    all_traces.append(node_trace)  # Add nodes last so they're on top
+
+    # --- Create slider steps ---
+    steps = []
+    for selected_lag in range(1, max_lag + 1):
+        # Create visibility list for this lag
+        visible = []
+        
+        for lag in range(1, max_lag + 1):
+            for _ in edge_traces_by_lag[lag]:
+                visible.append(lag <= selected_lag)
+        
+        visible.append(True)  # Node trace always visible (now at the end)
+        
+        if selected_lag == 1:
+            step = dict(
+                method="update",
+                args=[{"visible": visible}],
+                label=f"Lag = {selected_lag}"
+            )
+        else:
+            step = dict(
+                method="update",
+                args=[{"visible": visible}],
+                label=f"Lag ≤ {selected_lag}"
+            )
+        steps.append(step)
+
+    sliders = [dict(
+        active=0,
+        steps=steps
+    )]
+
+    # --- Figure ---
+    fig = go.Figure(data=all_traces)
+
+    fig.update_layout(
+        title="PCMCI Causal Graph (Interactive by Lag)",
+        showlegend=False,
+        sliders=sliders,
+        xaxis=dict(showgrid=False, zeroline=False, visible=False),
+        yaxis=dict(showgrid=False, zeroline=False, visible=False),
+        hovermode='closest',
+        height=800,
+        autosize=True,
+        #width=900,
+    )
+
+    fig.show()
+    fig.write_html(output_html)
+
+def average_toxicity_traits(df, groupby_col='SOURCE_SUBREDDIT'):
+    """
+    Calculate average toxicity traits from interaction dataframe.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame with columns: SOURCE_SUBREDDIT, TARGET_SUBREDDIT, 
+        POST_ID, TIMESTAMP, TOXICITY_CAT
+    groupby_col : str, default='SOURCE_SUBREDDIT'
+        Column to group by for duration calculation. Options:
+        'SOURCE_SUBREDDIT', 'TARGET_SUBREDDIT', or 'BOTH'
+    
+    Returns:
+    --------
+    dict with keys:
+        - 'avg_daily_toxicity': float, average proportion of toxic interactions per day
+        - 'avg_toxic_duration_hours': float, average time until next interaction after a toxic one
+        - 'num_toxic_interactions': int, number of toxic interactions with measurable duration
+    """
+    
+    # Make a copy to avoid modifying original
+    df = df.copy()
+    
+    # Ensure TIMESTAMP is datetime
+    df['TIMESTAMP'] = pd.to_datetime(df['TIMESTAMP'])
+    
+    # 1. Calculate average daily toxicity
+    df['DATE'] = df['TIMESTAMP'].dt.date
+    daily_toxicity = df.groupby('DATE')['TOXICITY_CAT'].mean()
+    avg_daily_toxicity = daily_toxicity.mean()
+    
+    # 2. Calculate average duration of toxic interactions
+    toxic_durations = []
+    
+    # Determine grouping
+    if groupby_col == 'BOTH':
+        group_cols = ['SOURCE_SUBREDDIT', 'TARGET_SUBREDDIT']
+    else:
+        group_cols = [groupby_col]
+    
+    # Process each subreddit (or subreddit pair)
+    for group_key, group_df in df.groupby(group_cols):
+        # Sort by timestamp
+        group_df = group_df.sort_values('TIMESTAMP').reset_index(drop=True)
+        
+        # For each toxic interaction, measure time until next interaction
+        for idx in range(len(group_df) - 1):
+            if group_df.iloc[idx]['TOXICITY_CAT'] == 1:
+                current_time = group_df.iloc[idx]['TIMESTAMP']
+                next_time = group_df.iloc[idx + 1]['TIMESTAMP']
+                duration = (next_time - current_time).total_seconds() / 3600  # Convert to hours
+                toxic_durations.append(duration)
+    
+    # Calculate average duration
+    if toxic_durations:
+        avg_toxic_duration = np.mean(toxic_durations)
+    else:
+        avg_toxic_duration = 0.0
+
+    print(f"Average daily toxicity: {avg_daily_toxicity:.3f}")
+    print(f"Average toxic duration: {avg_toxic_duration:.2f} hours")
+
+
+def run_time_window_identification(interactions_df, case_study_id):
+    # Get python ID
+    case_study_id_py = case_study_id - 1
+
+    # Subreddit keyword to focus on
+    KEYWORD = KEYWORDS[case_study_id_py]
+
+    # Extract focused dadaframe
+    temp_focused_df = extract_focused_df(interactions_df, KEYWORD)
+
+    # Construct daily interaction dataframe (without time window restriction)
+    daily_interaction_df = construct_daily_interaction_df(temp_focused_df, KEYWORD, bin_freq='D')
+    daily_neg_interaction_df = construct_daily_interaction_df(temp_focused_df[temp_focused_df["TOXICITY_CAT"] == 1], KEYWORD, bin_freq='D')
+
+    # html filenames
+    html_filename_1 = f"Results_html/CS{case_study_id}/CS{case_study_id}_1_daily_interactions_overall.html"
+    html_filename_2 = f"Results_html/CS{case_study_id}/CS{case_study_id}_2_daily_interactions_negative.html"
+
+    # Plot daily interactions
+    plot_daily_interactions(daily_interaction_df[["DAILY_TOTAL_TARGET_INTERACTIONS",
+                                                "DAILY_TOTAL_SOURCE_INTERACTIONS"]], 
+                                                threshold=THRESHOLDS[case_study_id_py],
+                                                html_filename=html_filename_1)
+    plot_daily_interactions(pd.DataFrame(daily_neg_interaction_df["DAILY_TOTAL_INTERACTIONS"].rename("DAILY_TOTAL_TOXIC_INTERACTIONS")), 
+                                                threshold=THRESHOLDS[case_study_id_py], 
+                                                specifier="Toxic",
+                                                html_filename=html_filename_2)
+
+def run_init_toxic_event_assessment(interactions_df, case_study_id):
+
+    # Get python ID
+    case_study_id_py = case_study_id - 1
+    
+    # Parameters to consider
+    TIME_WINDOW = TIME_WINDOWS[case_study_id_py]
+    KEYWORD = KEYWORDS[case_study_id_py]
+
+    # Extract focused dadaframe
+    focused_df = extract_focused_df(interactions_df, KEYWORD, TIME_WINDOW)
+
+    # Extract focused subreddits
+    interacting_subreddits = pd.unique(focused_df[['SOURCE_SUBREDDIT', 'TARGET_SUBREDDIT']].values.ravel()).tolist()
+    if case_study_id_py == 0:
+        neighboring_subreddits = pd.read_csv("Data/cluster0_network_target")["subreddit"].tolist()
+    elif case_study_id_py == 1:
+        neighboring_subreddits = pd.read_csv("Data/cluster1_network_source")["subreddit"].tolist()
+    elif case_study_id_py == 2:
+        neighboring_subreddits = pd.read_csv("Data/cluster2_network_source")["subreddit"].tolist() + pd.read_csv("Data/cluster2_network_target")["subreddit"].tolist()
+    else:
+        print("Error: Case study ID not recognized for neighboring subreddits.")
+        neighboring_subreddits = []
+    focused_subreddits = list(set(interacting_subreddits).union(set(neighboring_subreddits)))
+    print("-------------------------------------------")
+    print("Case Study", case_study_id, ":")
+    print(len(interacting_subreddits), "interacting subreddits found.")
+    print(len(focused_subreddits) - len(interacting_subreddits), "additional neighboring subreddits found. (", 
+          (len(focused_subreddits) - len(interacting_subreddits)) / len(neighboring_subreddits) * 100, 
+          "% of neighboring subreddits included.)")
+    print("-------------------------------------------")
+
+    return focused_df, focused_subreddits
+
+def run_daily_interactions(focused_df, case_study_id):
+    
+    # Get python ID
+    case_study_id_py = case_study_id - 1
+    
+    # Parameters to consider
+    TIME_WINDOW = TIME_WINDOWS[case_study_id_py]
+    KEYWORD = KEYWORDS[case_study_id_py]
+    TIME_SERIES_FREQ = TIME_SERIES_FREQUENCIES[case_study_id_py]
+
+    # Count the number of daily interactions across all considered subreddits
+    daily_interaction_df = construct_daily_interaction_df(focused_df, KEYWORD, TIME_WINDOW, bin_freq=TIME_SERIES_FREQ)
+    plot_daily_interactions(daily_interaction_df[["DAILY_TOTAL_SOURCE_INTERACTIONS",
+                                                "DAILY_TOTAL_TARGET_INTERACTIONS",
+                                                "DAILY_TOTAL_INTERACTIONS"]],
+                                                html_filename=f"Results_html/CS{case_study_id}/CS{case_study_id}_3_daily_interactions_windowed.html",
+                                                bin_freq=TIME_SERIES_FREQ)
+    
+def run_top_interactors(focused_df, case_study_id):
+
+    # Get python ID
+    case_study_id_py = case_study_id - 1
+
+    # Count the number of interaction as source and as target for each subreddit
+    sr_interaction_count_df = construct_interaction_count_df(focused_df)
+
+    # Choose the number of subreddits to plot
+    NB_TO_PLOT = TOP_INTERACTORS_TO_PLOT[case_study_id_py]
+
+    plot_top_interactors(sr_interaction_count_df,
+                        x_col = "SUBREDDIT",
+                        y_cols = ["SOURCE_INTERACTIONS", "TARGET_INTERACTIONS"],
+                        legend = ["As Source", "As Target", "Total"],
+                        x_ticklabels=sr_interaction_count_df.head(NB_TO_PLOT)["SUBREDDIT"],
+                        plot_top = NB_TO_PLOT,
+                        html_filename=f"Results_html/CS{case_study_id}/CS{case_study_id}_4_top_interactors_windowed.html")
+    return sr_interaction_count_df
+
+def run_toxic_interactions_over_time(focused_df, case_study_id):
+
+    # Get python ID
+    case_study_id_py = case_study_id - 1
+
+    # Parameters to consider
+    TIME_WINDOW = TIME_WINDOWS[case_study_id_py]
+    TIME_SERIES_FREQ = TIME_SERIES_FREQUENCIES[case_study_id_py]
+    CRITERION = ["TOXICITY_CAT"]
+    THRESHOLDS_toxic = [0.5]
+    UPPER = [False]
+
+    daily_neg_interaction_df = construct_neg_interaction_df(focused_df, 
+                                                            time_window=TIME_WINDOW, 
+                                                            criteria=CRITERION, 
+                                                            threshold=THRESHOLDS_toxic, 
+                                                            upper=UPPER,
+                                                            groupby_type="DAY",
+                                                            bin_freq=TIME_SERIES_FREQ)
+
+    plot_daily_interactions(daily_neg_interaction_df, 
+                            specifier="Toxic", 
+                            bin_freq=TIME_SERIES_FREQ, 
+                            moving_avg_window=MOVING_AVERAGE_WINDOWS[case_study_id_py],
+                            html_filename=f"Results_html/CS{case_study_id}/CS{case_study_id}_5_daily_negative_interactions_windowed.html")
+    
+    return daily_neg_interaction_df 
+
+def run_top_toxic_interactors(focused_df, case_study_id):
+
+    # Get python ID
+    case_study_id_py = case_study_id - 1
+
+    # Parameters to consider
+    TIME_WINDOW = TIME_WINDOWS[case_study_id_py]
+    CRITERION = ["TOXICITY_CAT"]
+    THRESHOLDS_toxic = [0.5]
+    UPPER = [False]
+    NB_TO_PLOT = TOP_INTERACTORS_TO_PLOT[case_study_id_py]
+
+    # Compute negative interactions as source
+    sr_neg_source_interaction_df = construct_neg_interaction_df(focused_df, 
+                                                            time_window=TIME_WINDOW, 
+                                                            criteria=CRITERION, 
+                                                            threshold=THRESHOLDS_toxic, 
+                                                            upper=UPPER,
+                                                            groupby_type="SOURCE_SUBREDDIT")
+
+    # Compute negative interactions as target
+    sr_neg_target_interaction_df = construct_neg_interaction_df(focused_df, 
+                                                            time_window=TIME_WINDOW, 
+                                                            criteria=CRITERION, 
+                                                            threshold=THRESHOLDS_toxic, 
+                                                            upper=UPPER,
+                                                            groupby_type="TARGET_SUBREDDIT")
+
+    # Add interactions and sort them by total
+    sr_neg_interaction_df = smart_df_add(sr_neg_source_interaction_df, sr_neg_target_interaction_df)
+    sr_neg_interaction_df["TOTAL_NEGATIVE_INTERACTIONS"] = sr_neg_interaction_df.sum(axis=1)
+    sr_neg_interaction_df = sr_neg_interaction_df.sort_values(by="TOXICITY_CAT_0.5_LOWER", ascending=False)
+
+    plot_top_interactors(sr_neg_interaction_df,
+                        x_col = None,
+                        y_cols = sr_neg_interaction_df.columns[:-1],
+                        legend = sr_neg_interaction_df.columns,
+                        x_ticklabels = sr_neg_interaction_df.head(NB_TO_PLOT).index,
+                        plot_top = NB_TO_PLOT,
+                        y_axis_scale='log',
+                        html_filename=f"Results_html/CS{case_study_id}/CS{case_study_id}_6_top_negative_interactors_windowed.html")
+    
+def run_pcmci_analysis(daily_neg_interaction_df, focused_subreddits, sr_interaction_count_df, interactions_df, case_study_id):
+
+    # Get python ID
+    case_study_id_py = case_study_id - 1
+
+    # Parameters to consider
+    TIME_WINDOW = TIME_WINDOWS[case_study_id_py]
+    MAX_LAG = MAX_LAGS[case_study_id_py]
+    ALPHA = ALPHAS[case_study_id_py]
+    NB_SUBREDDITS_TO_FOCUS = NB_SUBREDDITS_TO_FOCUS_PCMCI[case_study_id_py]
+
+    finer_focused_subreddits = list(sr_interaction_count_df.sort_values(by="TOTAL_INTERACTIONS", ascending=False).head(NB_SUBREDDITS_TO_FOCUS)["SUBREDDIT"])
+
+    time_series_neg_df = construct_time_series_df(interactions_df[interactions_df["TOXICITY_CAT"] == 1], subreddit_names=finer_focused_subreddits, time_window=TIME_WINDOW)
+    time_series_df = construct_time_series_df(interactions_df, subreddit_names=finer_focused_subreddits, time_window=TIME_WINDOW)
+
+    p_matrix, val_matrix, edges = compute_PCMCI(time_series_df, max_lag=MAX_LAG, alpha=ALPHA, show=True, case_study_id_py=case_study_id_py)
+    p_matrix_neg, val_matrix_neg, edges_neg = compute_PCMCI(time_series_neg_df, max_lag=MAX_LAG, alpha=ALPHA, show=True, case_study_id_py=case_study_id_py)
+
+    return edges, edges_neg, finer_focused_subreddits
