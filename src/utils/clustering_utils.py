@@ -923,14 +923,6 @@ def detect_mega_subreddits(features: pd.DataFrame, temporal_features: pd.DataFra
     # Add is_mega to features for clustering (binary feature: 0 or 1)
     features['is_mega'] = temporal_features.loc[features.index, 'is_mega'].astype(int)
     feature_cols.append('is_mega')
-    print(f"\n  Added 'is_mega' as binary feature (0/1) to clustering features")
-    print(f"  Total features for clustering: {len(feature_cols)}")
-
-    # We verify no inf/nan remain
-    print(f"\nData quality check before scaling:")
-    print(f"  NaN values: {features.isna().sum().sum()}")
-    print(f"  Inf values: {np.isinf(features.values).sum()}")
-    print(f"  Max value: {features.max().max():.2f}")
 
     return features, temporal_features, feature_cols
 
@@ -1050,15 +1042,12 @@ def dimensionality_reduction_2d(X_pca: np.ndarray, X_scaled: np.ndarray, umap_av
         # We chose the number of neighbors as the square roolt of the number of samples (roughly 35 for 1338 samples)
         reducer = umap.UMAP(n_components=2, min_dist=0.1, n_neighbors=35, random_state=42)
         embedding = reducer.fit_transform(X_pca)  # We project the PC space to 2D
-        print(f"\nUsing UMAP to project {X_pca.shape[1]}D PC space → 2D for visualization")
     else:
         # We use first 2 PCs for visualization if UMAP is unavailable
         reducer = PCA(n_components=2, random_state=42)
         embedding = reducer.fit_transform(X_scaled)
         reducer_name = "PCA"
         print(f"\nUsing first 2 PCs for 2D visualization (UMAP not available)")
-
-    print(f"  Note: 2D projection is for visualization only, clustering uses {X_pca.shape[1]}D PC space")
     
     # We add embedding coordinates to features dataframe for plotting later
     result_df["embed_x"] = embedding[:, 0]
@@ -1093,7 +1082,7 @@ def compute_optimal_k(features: pd.DataFrame, X_scaled: np.ndarray, n_components
     print(f"\nEvaluating k values with {n_bootstrap} bootstrap samples per k...")
     
     for k in [2, 3, 4, 5, 6, 7, 8, 9, 10]:
-        print(f"\n  Testing k={k}...")
+        print(f"  Testing k={k}...")
         
         # We run clustering on full dataset
         km = KMeans(n_clusters=k, n_init=20, random_state=42)
@@ -1287,13 +1276,10 @@ def validate_clusters_statistical(X_pca: np.ndarray, features: pd.DataFrame, clu
     results['calinski_harabasz'] = calinski_harabasz_score(X_pca, cluster_labels)
     
     print("\nClustering Quality Metrics:")
-    print(f"  Davies-Bouldin Index: {results['davies_bouldin']:.3f} (lower is better, < 1.0 is good)")
-    print(f"  Calinski-Harabasz Score: {results['calinski_harabasz']:.1f} (higher is better)")
+    print(f"  Davies-Bouldin Index: {results['davies_bouldin']:.3f}")
+    print(f"  Calinski-Harabasz Score: {results['calinski_harabasz']:.1f}")
     
-    # We perform statistical tests for each feature across clusters
-    print("\nStatistical Tests for Feature Discrimination Across Clusters:")
-    print("  (Testing if clusters differ significantly on each feature)")
-    
+
     significant_features = []
     feature_test_results = []
     
@@ -1442,9 +1428,6 @@ def assemble_results_dataframe(features: pd.DataFrame, feature_cols: list,cluste
             print(f"\n  WARNING: One cluster contains >80% of data!")
 
     # Cluster interpretation
-    print("\n" + "="*60)
-    print("CLUSTER CHARACTERISTICS (median values)")
-    print("="*60)
     interpretation_cols = [
         "total_tox_count_raw",
         "src_tox_count_raw", 
@@ -1459,7 +1442,6 @@ def assemble_results_dataframe(features: pd.DataFrame, feature_cols: list,cluste
     # Filter to only existing columns
     interpretation_cols = [col for col in interpretation_cols if col in result_df.columns]
     cluster_summary = result_df.groupby("cluster")[interpretation_cols].median()
-    print(cluster_summary)
 
     return result_df, cluster_summary
 
@@ -1559,14 +1541,14 @@ def classify_temporal_patterns(result_df: pd.DataFrame) -> pd.DataFrame:
         print(f"  {role:12s}: {count:4d} ({pct:5.1f}%)")
 
     # We analyze temporal patterns by cluster
-    print("\nTemporal Pattern Distribution by Cluster:")
+    print("\nTemporal Pattern Distribution by Cluster (in %):")
     # We create a frequency table where each row is a cluster, each column is a temporal pattern and the each value is 
     # the percentage of subreddits in that cluster with that temporal pattern
     pattern_by_cluster = pd.crosstab(result_df['cluster'], result_df['temporal_pattern'], normalize='index') * 100
     print(pattern_by_cluster.round(1))
 
     # We analyze dominant role distribution by cluster
-    print("\nDominant Role Distribution by Cluster:")
+    print("\nDominant Role Distribution by Cluster (in %):")
     role_by_cluster = pd.crosstab(result_df['cluster'], result_df['dominant_role'], normalize='index') * 100
     print(role_by_cluster.round(1))
 
@@ -1924,14 +1906,9 @@ def create_interactive_plotly_visualization(result_df: pd.DataFrame, reducer_nam
 
     fig.show(config=config)
 
-    print("\n   Interactive plot created. Hover over points to see details.")
-    print("  Each point shows: Subreddit name, Cluster interpretation, Temporal pattern, Event counts")
-    print("  Controls: Scroll to zoom, drag to pan, double-click to reset view")
-
     # We export to HTML file
     fig.write_html(output_path, config=config)
-    print(f"\n  Interactive plot exported to: {output_path}")
-    print(f"  Ready for embedding in Jekyll website")
+    
     
 
 # # create_interactive_plotly_visualization(result_df, reducer_name, feature_cols)
@@ -1953,8 +1930,7 @@ def analyze_mega_subreddits_in_clusters(result_df: pd.DataFrame, n_top: int = 15
         return None
     
     mega_df = result_df[result_df['is_mega']].copy()
-    print(f"\nAnalyzing {len(mega_df)} mega-subreddits included in clustering...")
-    
+        
     # We classify mega-subreddits by dominant role
     mega_df['mega_role'] = mega_df.apply(
         lambda row: 'Mega-Aggressor' if row['src_tox_count_raw'] > row['tgt_tox_count_raw'] * 1.5
@@ -1962,30 +1938,12 @@ def analyze_mega_subreddits_in_clusters(result_df: pd.DataFrame, n_top: int = 15
         else 'Mega-Hub', axis=1
     )
     
-    print(f"\nTop {n_top} Mega-Subreddits (now clustered):")
-    display_cols = ['cluster', 'total_tox_count_raw', 'src_tox_count_raw', 'tgt_tox_count_raw', 
-                    'net_toxicity_raw', 'mega_role', 'temporal_pattern']
-    top_mega = mega_df.nlargest(n_top, 'total_tox_count_raw')[display_cols]
-    print(top_mega)
-    
     print("\nMega-Subreddit Role Distribution:")
     role_distribution = mega_df['mega_role'].value_counts()
     print(role_distribution)
     for role, count in role_distribution.items():
         pct = 100 * count / len(mega_df)
         print(f"  {role}: {count} ({pct:.1f}%)")
-    
-    print("\nMega-Subreddit Cluster Distribution:")
-    cluster_distribution = mega_df['cluster'].value_counts().sort_index()
-    print(cluster_distribution)
-    for cluster_id, count in cluster_distribution.items():
-        pct = 100 * count / len(mega_df)
-        print(f"  Cluster {cluster_id}: {count} mega-subreddits ({pct:.1f}% of all mega-subreddits)")
-    
-    print("\nMega-Subreddit Summary Statistics:")
-    stats = mega_df[['total_tox_count_raw', 'src_tox_count_raw', 'tgt_tox_count_raw', 
-                      'net_in_degree_raw', 'net_out_degree_raw']].describe()
-    print(stats)
     
     return mega_df
 

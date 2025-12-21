@@ -390,7 +390,7 @@ def plot_daily_interactions(dataframe, bin_freq="D",
     # Update layout
     x_label = "Time" if "h" in bin_freq.lower() else "Day"
 
-    current_case_study = html_filename[15]
+    current_case_study = html_filename[20]
     
     fig.update_layout(
         title=f"Total {specifier} Interactions over time (Case Study {current_case_study}: '{CASE_STUDY_NAMES[int(current_case_study)-1]}')",
