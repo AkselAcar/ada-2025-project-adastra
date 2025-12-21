@@ -185,7 +185,7 @@ Finally, we analyze the life cycle of the event. For this, we perform a causal i
 ### Members:
 
 - Aksel Akar: Propagation-style clustering, Repo management, Datastory
-- Emilien Coudurier: Study cases (event identification and life-cycle analysis)
+- Emilien Coudurier: Study cases (structure and analysis)
 - Nathan Tabet: Reddit embeddings mappings, community exploration, toxicity evolution
 - Cyprien Tordo: Metrics (toxicity scoring and binary classification), Website Design, Datastory
 - Cedric Zanou: Propagation clustering, Repo management, Datastory
