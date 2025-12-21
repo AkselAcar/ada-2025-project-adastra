@@ -48,118 +48,20 @@ To better understand how toxicity is spreading throughout reddit, we map the hyp
 1. How different topics are reprented spatially in the Hyperlink Network;
 2. How toxicity is distributed across the map and evolving through time.
 
-
 ### 3. Temporal Toxicity Clustering Analysis
 
-#### Overview
+In this part, we group subreddits into **behavioral archetypes** of toxicity, based on when they are active, whether they act more as aggressors or victims, and how they are positioned in the hyperlink network.
 
-This phase identifies **distinct behavioral archetypes** of toxic behavior on Reddit by clustering subreddits based on their temporal dynamics, role-aware features, and network structure. Rather than binary toxic/non-toxic classification, we reveal how toxicity manifests over time: chronic vs. bursty vs. occasional patterns, aggressor vs. victim roles, and isolated vs. hub positions in the toxic network.
+We first build a **feature space** tailored to propagation-style behavior. For each subreddit, we compute:
+- **Role-aware temporal features** for source and target roles (how often they send/receive toxicity, how long they are active, how regular or bursty their activity is, and how recent their toxic events are).
+- **Network features** (in-degree, out-degree, reciprocity) to describe whether a community is isolated, mostly attacked, mostly attacking, or a hub in mutual conflicts.
+- A **volume signal** to identify “mega-subreddits” that operate at much higher toxic activity levels than typical communities.
 
----
+To obtain reliable clusters, we apply a preprocessing pipeline: we filter out very low-activity subreddits, reduce redundant features (VIF), normalize skewed distributions (log transform and winsorization), detect and flag mega-subreddits on raw counts, and finally standardize all features so they contribute comparably.
 
-#### Feature Engineering
+We then use **Principal Component Analysis (PCA)** to compress this cleaned feature set into a smaller number of principal components that retain most of the variance, giving each subreddit a compact “behavioral fingerprint”.
 
-We engineer three complementary feature sets to capture multidimensional toxicity dynamics:
-
-##### 1. Role-Aware Temporal Features
-Computed **separately** for aggressor (source) and victim (target) roles:
-- **Event counts**: Total toxic interactions sent/received
-- **Temporal spans**: Duration of toxic activity periods
-- **Gap statistics**: Median gaps and coefficient of variation (regularity vs. irregularity)
-- **Burst intensity**: Maximum events in any 30-day window
-- **Recency**: Percentage of recent events (escalation detection)
-
-
-
-##### 2. Network Features
-- **Out-degree**: Distinct subreddits targeted by this community
-- **In-degree**: Distinct sources attacking this community  
-- **Reciprocity**: Proportion of bidirectional toxic relationships
-
-
-##### 3. Volume Classification
-Raw total toxic event counts to preserve scale information, especially for mega-subreddit detection.
-
----
-
-#### Preprocessing Pipeline
-
-##### 1. Low-Activity Filter
-Remove subreddits with <10 toxic events (statistical unreliability, noise amplification).
-
-##### 2. Multicollinearity Reduction (VIF Analysis)
-Iteratively remove features with VIF > 10 to eliminate redundancy and stabilize PCA.
-
-##### 3. Distributional Normalization
-- **Log-transformation**: `log(1+X)` for heavy-tailed count features (reduces outlier dominance in Euclidean distances)
-- **Winsorization**: Cap bounded percentages at 90th percentile
-
-##### 4. Mega-Subreddit Detection
-Flag top 1% on raw activity/degree as `is_mega` (binary feature retained in clustering).
-
-##### 5. Standard Scaling
-Z-score normalization ensures equal feature contribution to PCA variance and K-Means distances.
-
----
-
-#### Dimensionality Reduction
-
-**PCA (80% variance threshold)**: Reduces 14 VIF-cleaned features -> **6 principal components** explaining **84.5% variance**.
-
-**Benefits**:
-- Noise reduction
-- Computational efficiency  
-- Decorrelates features for cleaner K-Means convergence
-
----
-
-#### Clustering: K-Means with Comprehensive Validation
-
-### Optimal K Selection (K=4)
-Combined evaluation across:
-1. **Silhouette score** (~0.4): Cluster separation quality
-2. **Balance ratio** (~0.3): Avoids extreme size imbalances  
-3. **Bootstrap stability** (ARI = 0.94 +/- 0.05): Reproducibility across 100 runs
-
-##### Statistical Validation
-- **Davies-Bouldin Index**: Confirms low within-cluster spread vs. between-cluster separation
-- **Calinski-Harabasz Score**: High ratio of between/within variance validates meaningful partitions
-- **Kruskal-Wallis H-tests**: Per-feature significance testing with Bonferroni correction + eta-squared effect sizes
-
----
-
-#### Results: Four Behavioral Archetypes
-
-##### **Cluster 0: Moderate Aggressors (Mixed Pattern)** - 228 subreddits
-- **Profile**: Send >> receive (median: src=19, tgt=0, net=+19)
-- **Behavior**: Irregular attacks on multiple targets, event-driven hostility
-- **Network**: Low in-degree, moderate out-degree
-
-##### **Cluster 1: Moderate Victim-Leaning (Mixed Pattern)** - 636 subreddits
-- **Profile**: Receive > send (median: src=5, tgt=12, net=-7)  
-- **Behavior**: Controversial communities that attract criticism but fight back
-- **Network**: Higher in-degree than out-degree
-
-##### **Cluster 2: High-Volume Balanced Hubs (Bursty Pattern)** - 302 subreddits
-- **Profile**: Balanced bidirectional toxicity (median: src=40, tgt=46, net≈0)
-- **Behavior**: Intense episodic toxic outbreaks, coordinated campaigns
-- **Network**: High connectivity both directions (in-degree=22, out-degree=24)
-- **Mega-subreddits**: 24/26 mega-subreddits cluster here (validates volume + burst temporal signature)
-
-##### **Cluster 3: Low-Volume Pure Victims (Mixed Pattern)** - 198 subreddits
-- **Profile**: Receive-only toxicity (median: src=0, tgt=16, net=-15)
-- **Behavior**: One-sided harassment with no retaliation
-- **Network**: Moderate in-degree, zero out-degree
-
----
-
-#### Key Insights
-
-1. **Role Asymmetry**: Clear aggressor/victim/hub distinctions validate directional feature engineering
-2. **Temporal Diversity**: Mixed patterns dominate (70-84% per cluster), reflecting event-driven toxicity; bursty signature captures coordinated campaigns
-3. **Hub Phenomenon**: Cluster 2 serves as toxic battleground with important mutual conflicts.
-4. **Mega-Subreddit Concentration**: Extreme-volume communities share bursty temporal dynamics regardless of role balance
-
+On this reduced space, we run **K-Means clustering** and select the number of clusters using internal quality metrics (silhouette score, cluster size balance), stability checks (bootstrap-based Adjusted Rand Index), and standard indices (e.g., Davies–Bouldin, Calinski–Harabasz, Kruskal–Wallis tests). This yields a set of robust, reproducible clusters that summarize the main **propagation styles of toxicity** across Reddit.
 
 ### 4. Finding toxic communities
 
