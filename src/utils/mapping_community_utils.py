@@ -325,7 +325,7 @@ def subreddit_selector(embeddings_2d):
             "x": False, 
             "y": False
         },
-        title="Subreddits mapped by embeddings",
+        title="Active subreddits mapped by embeddings",
         labels={
             "x": "UMAP Dimension 1", 
             "y": "UMAP Dimension 2",
@@ -485,7 +485,7 @@ def plotly_embeddings(embeddings_2d, highlight="topic", write=False):
         color_discrete_sequence = ["#8A8787"]
         color_discrete_map = None
         category_orders = None
-        title = "Subreddits mapped by embeddings with topics"
+        title = "Active subreddits mapped by embeddings with topics"
         labels = {
             "x": "UMAP Dimension 1", 
             "y": "UMAP Dimension 2",
@@ -504,7 +504,7 @@ def plotly_embeddings(embeddings_2d, highlight="topic", write=False):
         color_discrete_sequence = None
         color_discrete_map = cluster_palette
         category_orders = {"cluster": ["-1", "0", "1", "2", "3"]}  # Changed to "cluster"
-        title = "Subreddits mapped by embeddings with clusters"
+        title = "Active subreddits mapped by embeddings with clusters"
         labels = {
             "x": "UMAP Dimension 1", 
             "y": "UMAP Dimension 2",
@@ -526,7 +526,7 @@ def plotly_embeddings(embeddings_2d, highlight="topic", write=False):
         color_discrete_sequence = None
         color_discrete_map = None
         category_orders = None
-        title = "Subreddits mapped by embeddings with toxicity"
+        title = "Active subreddits mapped by embeddings with toxicity"
         labels = {
             "x": "UMAP Dimension 1", 
             "y": "UMAP Dimension 2",
