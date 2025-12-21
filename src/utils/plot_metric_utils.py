@@ -157,7 +157,7 @@ def evaluate_props_norm_diffs(interactions_df, threshold):
     )
 
     fig.show()
-    fig.write_html("property_diffs.html")
+    fig.write_html("Data/Results_html/property_diffs.html")
 
     return avg_z_diffs
 
@@ -273,7 +273,7 @@ def plot_toxicity_camembert(tox_props):
     )
     
     with open("weights_slices.html", "w") as f:
-        f.write(html_string)
+        f.write("Data/Results_html/"+html_string)
     fig.show()
 
 ########################################################################################

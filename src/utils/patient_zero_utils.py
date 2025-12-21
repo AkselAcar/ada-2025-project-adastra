@@ -981,8 +981,8 @@ def run_time_window_identification(interactions_df, case_study_id):
     daily_neg_interaction_df = construct_daily_interaction_df(temp_focused_df[temp_focused_df["TOXICITY_CAT"] == 1], KEYWORD, bin_freq='D')
 
     # html filenames
-    html_filename_1 = f"Results_html/CS{case_study_id}/CS{case_study_id}_1_daily_interactions_overall.html"
-    html_filename_2 = f"Results_html/CS{case_study_id}/CS{case_study_id}_2_daily_interactions_negative.html"
+    html_filename_1 = f"Data/Results_html/CS{case_study_id}/CS{case_study_id}_1_daily_interactions_overall.html"
+    html_filename_2 = f"Data/Results_html/CS{case_study_id}/CS{case_study_id}_2_daily_interactions_negative.html"
 
     # Plot daily interactions
     plot_daily_interactions(daily_interaction_df[["DAILY_TOTAL_TARGET_INTERACTIONS",
@@ -1043,7 +1043,7 @@ def run_daily_interactions(focused_df, case_study_id):
     plot_daily_interactions(daily_interaction_df[["DAILY_TOTAL_SOURCE_INTERACTIONS",
                                                 "DAILY_TOTAL_TARGET_INTERACTIONS",
                                                 "DAILY_TOTAL_INTERACTIONS"]],
-                                                html_filename=f"Results_html/CS{case_study_id}/CS{case_study_id}_3_daily_interactions_windowed.html",
+                                                html_filename=f"Data/Results_html/CS{case_study_id}/CS{case_study_id}_3_daily_interactions_windowed.html",
                                                 bin_freq=TIME_SERIES_FREQ)
     
 def run_top_interactors(focused_df, case_study_id):
@@ -1063,7 +1063,7 @@ def run_top_interactors(focused_df, case_study_id):
                         legend = ["As Source", "As Target", "Total"],
                         x_ticklabels=sr_interaction_count_df.head(NB_TO_PLOT)["SUBREDDIT"],
                         plot_top = NB_TO_PLOT,
-                        html_filename=f"Results_html/CS{case_study_id}/CS{case_study_id}_4_top_interactors_windowed.html")
+                        html_filename=f"Data/Results_html/CS{case_study_id}/CS{case_study_id}_4_top_interactors_windowed.html")
     return sr_interaction_count_df
 
 def run_toxic_interactions_over_time(focused_df, case_study_id):
@@ -1090,7 +1090,7 @@ def run_toxic_interactions_over_time(focused_df, case_study_id):
                             specifier="Toxic", 
                             bin_freq=TIME_SERIES_FREQ, 
                             moving_avg_window=MOVING_AVERAGE_WINDOWS[case_study_id_py],
-                            html_filename=f"Results_html/CS{case_study_id}/CS{case_study_id}_5_daily_negative_interactions_windowed.html")
+                            html_filename=f"Data/Results_html/CS{case_study_id}/CS{case_study_id}_5_daily_negative_interactions_windowed.html")
     
     return daily_neg_interaction_df 
 
@@ -1134,7 +1134,7 @@ def run_top_toxic_interactors(focused_df, case_study_id):
                         x_ticklabels = sr_neg_interaction_df.head(NB_TO_PLOT).index,
                         plot_top = NB_TO_PLOT,
                         y_axis_scale='log',
-                        html_filename=f"Results_html/CS{case_study_id}/CS{case_study_id}_6_top_negative_interactors_windowed.html")
+                        html_filename=f"Data/Results_html/CS{case_study_id}/CS{case_study_id}_6_top_negative_interactors_windowed.html")
     
 def run_pcmci_analysis(daily_neg_interaction_df, focused_subreddits, sr_interaction_count_df, interactions_df, case_study_id):
 
