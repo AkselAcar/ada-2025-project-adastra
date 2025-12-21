@@ -4,9 +4,8 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
-
-# TODO: property_columns was already defined in data so not good to define twice
 property_columns = [
     "NUMBER_OF_CHARACTERS",
     "NUMBER_OF_CHARACTERS_WITHOUT_COUNTING_WHITE_SPACE",
@@ -96,93 +95,190 @@ property_columns = [
     "LIWC_FILLER"
 ]
 
+#############################################################################
+# Bar-plot of normlaized mean differences (interactive)
+#############################################################################
 def evaluate_props_norm_diffs(interactions_df, threshold):
-    """
-    Evaluate and visualize normalized property differences by link sentiment.
 
-    --> Compares a set of numeric property columns between positive and negative links
-    (as indicated by the `LINK_SENTIMENT` column). Each property is z-score normalized across
-    all links, and then the mean z-score is computed separately for positive and negative
-    sentiment groups. The function plots the difference between these two means and highlights
-    properties whose normalized difference exceeds a specified threshold.
-
-    Args:
-        interactions_df (pd.DataFrame): Input dataframe containing `LINK_SENTIMENT` and property columns.
-        threshold (float): Z-score difference threshold to flag significant properties.
-
-    Returns:
-        pd.Series: A Series of normalized mean differences (positive − negative) for each property.
-    """
-
-    # Normalize each property across all links
     props_only = interactions_df[property_columns]
-
-    # Select numeric columns
-    num_df = props_only.select_dtypes(include='number')
-
-    props_stats = pd.DataFrame({
-        'min': num_df.min(),
-        'median': num_df.median(),
-        'max': num_df.max()
-    }).T  # transpose so rows are min/median/max
-
-    # Display all columns without truncation
-    #display(props_stats)
-    print("test lala")
-
     props_mean = props_only.mean()
     props_std = props_only.std()
     props_z = (props_only - props_mean) / props_std
 
     df_z = pd.concat([interactions_df["LINK_SENTIMENT"], props_z], axis=1)
 
-    # Compute mean z-score per sentiment
     avg_z_by_sentiment = df_z.groupby("LINK_SENTIMENT").mean(numeric_only=True).T
     avg_z_by_sentiment.columns = ["negative", "positive"]
 
     avg_z_diffs = avg_z_by_sentiment["positive"] - avg_z_by_sentiment["negative"]
 
-   # Plot normalized differences
+    # ---- Build labels ----
+    short_labels = [f"P{i+1}" for i in range(len(avg_z_diffs))]
+    full_labels = avg_z_diffs.index.tolist()
+    values = avg_z_diffs.values
 
-    plt.figure(figsize=(18, 6))
+    colors = [
+        "green" if v > 0 else "darkred"
+        for v in values
+    ]
 
-    for i, (prop, diff) in enumerate(avg_z_diffs.items()):
-        plt.bar(
-            prop,
-            diff,
-            color = "green" if diff > 0 else "darkred",
-            alpha = 1 if abs(diff) > threshold else 0.5
+    opacity = [
+        1.0 if abs(v) > threshold else 0.5
+        for v in values
+    ]
+
+    # ---- Plotly figure ----
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=short_labels,
+        y=values,
+        marker=dict(color=colors, opacity=opacity),
+        customdata=full_labels,
+        hovertemplate=(
+            "<b>%{x}</b><br>"
+            "Property: %{customdata}<br>"
+            "Δ z-score: %{y:.3f}<extra></extra>"
         )
-    plt.axhline(0, color="black", linewidth=1)
-    plt.axhline(threshold, color="blue", linestyle = "--")
-    plt.axhline(-threshold, color="blue", linestyle = "--")
-    plt.xticks(np.arange(len(avg_z_diffs)), ["P" + str(i + 1) for i in np.arange(len(avg_z_diffs))])
-    plt.xticks(rotation=90)
-    plt.title("Normalized Difference of Property Means (Positive vs Negative Links)", fontsize = 14)
-    plt.ylabel("Δ (z-score difference: Positive − Negative)")
-    plt.xlabel("Property")
-    plt.tight_layout()
-    plt.grid()
-    plt.show()
+    ))
 
-    
-    # Print properties with high differences
+    # Threshold & zero lines
+    fig.add_hline(y=0, line_width=1, line_color="black")
+    fig.add_hline(y=threshold, line_dash="dash", line_color="blue")
+    fig.add_hline(y=-threshold, line_dash="dash", line_color="blue")
 
-    high_props = avg_z_diffs[avg_z_diffs > threshold].index.tolist()
-    low_props = avg_z_diffs[avg_z_diffs < -threshold].index.tolist()
+    fig.update_layout(
+        title="Normalized Difference of Property Means (Positive vs Negative Links)",
+        xaxis_title="Property",
+        yaxis_title="Δ (z-score difference: Positive − Negative)",
+        xaxis_tickangle=-90,
+        height=500,
+        margin=dict(l=20, r=20, t=40, b=40),
+    )
 
-    print(f"Found {len(high_props)} properties higher for positive links (zΔ > {threshold}):")
-    for i in high_props:
-        print(f"- (z_diff = {round(avg_z_diffs[i], 3)}) \t {i}")
-
-    print(f"\n Found {len(low_props)} properties higher for negative links (zΔ < -{threshold}):")
-    for i in low_props:
-        print(f"- (z_diff = {round(avg_z_diffs[i], 3)}) \t {i}")
+    fig.show()
+    fig.write_html("property_diffs.html")
 
     return avg_z_diffs
 
 
+########################################################################################
+# Slice-plot showing absolute weights of retained proprieties (interactive)
+########################################################################################
+def plot_toxicity_camembert(tox_props):
+    # ---- Property -> P_i mapping ----
+    prop_to_pi = {
+        prop: f"P{i+1}"
+        for i, prop in enumerate(property_columns)
+    }
+    df = tox_props.copy()
+    df["P_i"] = df["name"].map(prop_to_pi)
+    df["abs_weight"] = df["weight"].abs()
+    # ---- Sort: greens first, reds second ----
+    df = df.sort_values("weight")
+    # ---- Percentage contribution ----
+    total_abs = df["abs_weight"].sum()
+    df["pct"] = 100 * df["abs_weight"] / total_abs
+    # ---- Color mapping ----
+    max_abs = df["abs_weight"].max()
+    def color_from_weight(w):
+        intensity = abs(w) / max_abs
+        alpha = 0.4 + 0.6 * intensity
+        if w < 0:
+            return f"rgba(0, 140, 0, {alpha})"
+        else:
+            return f"rgba(180, 0, 0, {alpha})"
+    colors = df["weight"].apply(color_from_weight)
+    # ---- Slice labels ----
+    labels = [
+        f"{pi}<br>{pct:.1f}%"
+        for pi, pct in zip(df["P_i"], df["pct"])
+    ]
+    # ---- Pie ----
+    fig = go.Figure(
+        go.Pie(
+            values=df["abs_weight"],
+            labels=labels,
+            marker=dict(
+                colors=colors,
+                line=dict(color="black", width=1)
+            ),
+            customdata=np.stack(
+                [df["name"], df["weight"]],
+                axis=-1
+            ),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Weight norm: %{value}<br>"
+                "<extra></extra>"
+            ),
+            hole=0.15,
+            sort=False,
+            direction="clockwise",
+            textinfo="label"
+        )
+    )
+    # ---- Compact layout without title ----
+    fig.update_layout(
+        showlegend=False,
+        margin=dict(l=40, r=40, t=50, b=10),  # Marges équilibrées
+        height=400,  # Même hauteur que le conteneur
+        width=550,   # Largeur ajustée
+        paper_bgcolor="#fef9e7",  # Fond transparent
+        plot_bgcolor="#fef9e7",
+        title="Slice plot of absolute values of property weights",
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        annotations=[
+            dict(
+                text="Negative weights<br>(positive msgs)",
+                x=0.88,
+                y=1.12,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(color="green", size=11),
+                align="center"
+            ),
+            dict(
+                text="Positive weights<br>(negative msgs)",
+                x=0.12,
+                y=1.12,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(color="darkred", size=11),
+                align="center"
+            )
+        ]
+    )
+    
+    # Config pour bloquer toute interaction
+    config = {
+        'displayModeBar': False, 
+        'responsive': False,
+        'scrollZoom': False
+    }
+    
+    # Générer le HTML avec style inline
+    html_string = fig.to_html(
+        config=config,
+        include_plotlyjs='cdn'
+    )
+    
+    # Injecter du CSS pour centrer et bloquer overflow
+    html_string = html_string.replace(
+        '</head>',
+        '<style>body, html { margin: 0; padding: 0; overflow: hidden !important; height: 400px; display: flex; align-items: center; justify-content: center; }</style></head>'
+    )
+    
+    with open("weights_slices.html", "w") as f:
+        f.write(html_string)
+    fig.show()
 
+########################################################################################
+# Plot empirical distributions
+########################################################################################
 def plot_empirical_distribution(series, name):
     """
     Plot and summarize the empirical distribution of a numeric variable.
@@ -232,6 +328,9 @@ color_nontox = "#7CC0C6"
 color_tox = "#C185B6"
 
 
+########################################################################################
+# Cross-count bar-plots
+########################################################################################
 def cross_count_SENTIMENT_TOXICITY(interactions_df):
     """
     Visualize and analyze the relationship between LINK_SENTIMENT and TOXICITY_CAT.
@@ -300,6 +399,9 @@ def cross_count_SENTIMENT_TOXICITY(interactions_df):
     plt.tight_layout()
     plt.show()
 
+########################################################################################
+# Hyperlink activity over time
+########################################################################################
 
 def hyperlink_activity_over_time(interactions_df):
     interactions_df["year_month"] = interactions_df["TIMESTAMP"].dt.to_period("M").dt.to_timestamp()

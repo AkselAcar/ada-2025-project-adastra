@@ -6,5 +6,6 @@ from .scripts import *
 
 from .utils.compute_metric_utils import *
 from .utils.patient_zero_utils import *
-from .utils.plot_metrics_utils import *
-from .utils.network_utils import *
+from .utils.plot_metric_utils import *
+from .utils.mapping_community_utils import *
+from .utils.clustering_utils import *

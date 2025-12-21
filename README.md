@@ -23,7 +23,7 @@ Among others, we aim to address the following research questions:
 - Can we predict toxicity outcomes from early behavioral signals?
 
 ## ADDITIONAL DATASETS 
-We chose to use the following additional datasests: 
+We chose to use the following additional dataset: 
 - web-redditEmbeddings-subreddits.csv 
 
 <!-- The two first datasets contain subreddit links with their associated properties, the first one being only based on body links and the second on title links. They are independent datasets and since we have no purpose in treating them separately, we merge them and add a flag telling from which dataset the link is from. We benefit from this merging as it reduces the number of separate analyses, and forms a denser, more relevant dataset for our purpose.  -->
